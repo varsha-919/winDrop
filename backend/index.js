@@ -13,8 +13,10 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
+// 🔥 STORE UNIQUE PEERS
 const peers = new Map();
 
+// --- MULTER CONFIG ---
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
@@ -23,6 +25,8 @@ const storage = multer.diskStorage({
     filename: (req, file, cb) => cb(null, file.originalname)
 });
 const upload = multer({ storage: storage });
+
+// --- SPAWN CORE ENGINE ---
 const coreEngine = spawn('./core');
 
 coreEngine.stdout.on('data', (data) => {
@@ -39,8 +43,10 @@ coreEngine.stdout.on('data', (data) => {
                 if (raw.includes(':')) {
                     const [name, ip] = raw.split(':');
 
+                    // 🔥 IGNORE INVALID / LOCALHOST
                     if (!ip || ip === "127.0.0.1") return;
 
+                    // 🔥 STORE UNIQUE
                     peers.set(ip, name);
 
                     const peerList = Array.from(peers.entries()).map(([ip, name]) => ({
@@ -50,17 +56,18 @@ coreEngine.stdout.on('data', (data) => {
 
                     console.log("🟢 Active Devices:", peerList);
 
+                    // 🔥 SEND FULL LIST
                     io.emit('peers_list', peerList);
                 }
             }
 
         } else if (line.trim().length > 0) {
-            console.log(`[C++] ${line.trim()}`);
+            console.log(`⚙️ [C++] ${line.trim()}`);
         }
     });
 });
 
-// file upload
+// --- FILE UPLOAD & SEND ROUTE ---
 app.post('/send', upload.single('file'), (req, res) => {
     const { targetIp } = req.body;
     const filePath = req.file.path;
@@ -71,18 +78,19 @@ app.post('/send', upload.single('file'), (req, res) => {
 
     console.log(`🚀 Sending ${req.file.originalname} → ${targetIp}`);
 
+    // 🔥 USE REAL TARGET IP (NOT HARDCODED)
     const sender = spawn('./sender', [targetIp, filePath]);
 
     sender.stdout.on("data", (data) => {
-        console.log(`[SENDER]: ${data.toString()}`);
+        console.log(`📤 [SENDER]: ${data.toString()}`);
     });
 
     sender.stderr.on("data", (data) => {
-        console.error(`[SENDER ERROR]: ${data.toString()}`);
+        console.error(`❌ [SENDER ERROR]: ${data.toString()}`);
     });
 
     sender.on('close', (code) => {
-        console.log(`Sender finished (Code: ${code})`);
+        console.log(`🏁 Sender finished (Code: ${code})`);
 
         if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
@@ -92,10 +100,11 @@ app.post('/send', upload.single('file'), (req, res) => {
     });
 });
 
-// socket
+// --- SOCKET CONNECTION ---
 io.on("connection", (socket) => {
     console.log("🔌 Client connected");
 
+    // send current list immediately
     const peerList = Array.from(peers.entries()).map(([ip, name]) => ({
         name,
         ip

@@ -8,7 +8,6 @@
 #include <ifaddrs.h>
 #include <netdb.h>
 
-
 using namespace std;
 
 string getLocalIP()
@@ -72,7 +71,6 @@ void run_udp_broadcaster()
     close(sock);
 }
 
-
 // udp listener
 void run_udp_listener()
 {
@@ -125,6 +123,7 @@ void run_tcp_server()
         char buffer[1024];
         memset(buffer, 0, 1024);
 
+        // 1. Read the first chunk to get the filename
         int bytes_read = recv(new_socket, buffer, sizeof(buffer) - 1, 0);
         if (bytes_read <= 0)
         {
@@ -132,27 +131,30 @@ void run_tcp_server()
             continue;
         }
 
-        string raw_data(buffer, bytes_read);
+        std::string raw_data(buffer, bytes_read);
         size_t newline_pos = raw_data.find('\n');
 
-        if (newline_pos != string::npos)
+        if (newline_pos != std::string::npos)
         {
-            string filename = raw_data.substr(0, newline_pos);
-            cout << "Receiving file: " << filename << std::endl;
+            std::string filename = raw_data.substr(0, newline_pos);
+            std::cout << "📥 Receiving file: " << filename << std::endl;
 
-            ofstream outfile(filename, ios::binary);
+            // Create the file with the REAL name
+            std::ofstream outfile(filename, std::ios::binary);
 
+            // Write the "leftover" data from the first chunk (after the \n)
             if (bytes_read > newline_pos + 1)
             {
                 outfile.write(buffer + newline_pos + 1, bytes_read - (newline_pos + 1));
             }
 
+            // 2. Receive the rest of the file
             while ((bytes_read = recv(new_socket, buffer, sizeof(buffer), 0)) > 0)
             {
                 outfile.write(buffer, bytes_read);
             }
             outfile.close();
-            cout << "File Saved!" << std::endl;
+            std::cout << "✅ File Saved!" << std::endl;
         }
         close(new_socket);
     }
