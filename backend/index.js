@@ -7,6 +7,22 @@ const multer = require('multer');
 const fs = require('fs');
 
 const app = express();
+const os = require('os');
+
+// Helper to get all IP addresses of the CURRENT machine
+function getMyIPs() {
+    const ips = [];
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                ips.push(iface.address);
+            }
+        }
+    }
+    return ips;
+}
+const myIps = getMyIPs();
 app.use(cors());
 app.use(express.json());
 
@@ -44,7 +60,8 @@ coreEngine.stdout.on('data', (data) => {
                     const [name, ip] = raw.split(':');
 
                     // 🔥 IGNORE INVALID / LOCALHOST
-                    if (!ip || ip === "127.0.0.1") return;
+                    // 🔥 IGNORE INVALID, LOCALHOST, AND MYSELF
+if (!ip || ip === "127.0.0.1" || myIps.includes(ip)) return;
 
                     // 🔥 STORE UNIQUE
                     peers.set(ip, name);

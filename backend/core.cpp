@@ -8,6 +8,7 @@
 #include <ifaddrs.h>
 #include <netdb.h>
 
+
 using namespace std;
 
 string getLocalIP()
@@ -56,10 +57,17 @@ void run_udp_broadcaster()
     struct sockaddr_in broadcast_addr;
     broadcast_addr.sin_family = AF_INET;
     broadcast_addr.sin_port = htons(8888);
-    broadcast_addr.sin_addr.s_addr = inet_addr("239.255.255.250");
+    // CHANGE THIS TO 255.255.255.255
+    broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
 
     string ip = getLocalIP();
-    string name = "Sumit_Laptop";
+
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) != 0)
+    {
+        strcpy(hostname, "Unknown_Peer");
+    }
+    string name(hostname);
 
     string message = name + ":" + ip + " Alive";
 
@@ -81,25 +89,34 @@ void run_udp_listener()
     struct sockaddr_in listen_addr;
     listen_addr.sin_family = AF_INET;
     listen_addr.sin_port = htons(8888);
-    listen_addr.sin_addr.s_addr = INADDR_ANY;
+    listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     bind(sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
 
-    struct ip_mreq mreq;
-    mreq.imr_multiaddr.s_addr = inet_addr("239.255.255.250");
-    mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+    // THE NEW FIX: Filter by your computer's name, not IP!
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) != 0)
+    {
+        strcpy(hostname, "Unknown_Peer");
+    }
+    string my_name(hostname);
 
     char buffer[1024];
     while (true)
     {
         memset(buffer, 0, sizeof(buffer));
         recvfrom(sock, buffer, sizeof(buffer), 0, nullptr, nullptr);
-        std::cout << "Founded Peer: " << buffer << "\n";
+
+        string received_msg(buffer);
+
+        // If the message does NOT contain our own laptop's name, print it!
+        if (received_msg.find(my_name) == string::npos)
+        {
+            std::cout << "Founded Peer: " << buffer << "\n";
+        }
     }
     close(sock);
 }
-
 // file receiver
 void run_tcp_server()
 {

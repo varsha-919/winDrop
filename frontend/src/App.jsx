@@ -2,7 +2,9 @@ import React, { useEffect, useState } from "react";
 import io from "socket.io-client";
 import axios from "axios";
 
-const socket = io("http://localhost:5000");
+// const socket = io("http://localhost:5000");
+// Change from "http://localhost:5000" to:
+const socket = io(`http://${window.location.hostname}:5000`);
 
 function App() {
   const [peers, setPeers] = useState([]);
@@ -29,7 +31,9 @@ function App() {
     formData.append("targetIp", targetIp);
 
     try {
-      await axios.post("http://localhost:5000/send", formData);
+      // await axios.post("http://localhost:5000/send", formData);
+      // Change from "http://localhost:5000/send" to:
+await axios.post(`http://${window.location.hostname}:5000/send`, formData);
       alert("File sent!");
     } catch (err) {
       console.error(err);
