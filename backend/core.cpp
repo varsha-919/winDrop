@@ -5,8 +5,47 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <cstring>
+#include <ifaddrs.h>
+#include <netdb.h>
+
 
 using namespace std;
+
+string getLocalIP()
+{
+    struct ifaddrs *ifaddr, *ifa;
+    char host[NI_MAXHOST];
+
+    if (getifaddrs(&ifaddr) == -1)
+    {
+        perror("getifaddrs");
+        return "127.0.0.1";
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+    {
+        if (ifa->ifa_addr == NULL)
+            continue;
+
+        if (ifa->ifa_addr->sa_family == AF_INET)
+        {
+            getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+                        host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+
+            string ip = host;
+
+            // Skip localhost
+            if (ip != "127.0.0.1")
+            {
+                freeifaddrs(ifaddr);
+                return ip;
+            }
+        }
+    }
+
+    freeifaddrs(ifaddr);
+    return "127.0.0.1";
+}
 
 // udp broadcaster
 void run_udp_broadcaster()
@@ -20,7 +59,10 @@ void run_udp_broadcaster()
     broadcast_addr.sin_port = htons(8888);
     broadcast_addr.sin_addr.s_addr = inet_addr("239.255.255.250");
 
-    string message = "Sumit_Laptop:192.168.1.5 Alive";
+    string ip = getLocalIP();
+    string name = "Sumit_Laptop";
+
+    string message = name + ":" + ip + " Alive";
 
     while (true)
     {
@@ -29,6 +71,7 @@ void run_udp_broadcaster()
     }
     close(sock);
 }
+
 
 // udp listener
 void run_udp_listener()
@@ -67,36 +110,53 @@ void run_tcp_server()
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
     struct sockaddr_in address;
+    // Change this part in core.cpp:
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_addr.s_addr = htonl(INADDR_ANY); // Ensure Host-to-Network Long conversion
     address.sin_port = htons(8080);
-
     bind(server_fd, (struct sockaddr *)&address, sizeof(address));
-    listen(server_fd, 3);
-
-    int addrlen = sizeof(address);
-    char buffer[1024];
+    listen(server_fd, 5);
 
     while (true)
     {
+        int addrlen = sizeof(address);
         int new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen);
-        cout << "Incoming file transfer started...\n";
 
-        ofstream outfile("lighthouse_received_file.txt", ios::binary);
-        int bytes_received;
+        char buffer[1024];
+        memset(buffer, 0, 1024);
 
-        while ((bytes_received = recv(new_socket, buffer, sizeof(buffer), 0)) > 0)
+        int bytes_read = recv(new_socket, buffer, sizeof(buffer) - 1, 0);
+        if (bytes_read <= 0)
         {
-            outfile.write(buffer, bytes_received);
+            close(new_socket);
+            continue;
         }
 
-        cout << "File received successfully!\n";
-        outfile.close();
+        string raw_data(buffer, bytes_read);
+        size_t newline_pos = raw_data.find('\n');
+
+        if (newline_pos != string::npos)
+        {
+            string filename = raw_data.substr(0, newline_pos);
+            cout << "Receiving file: " << filename << std::endl;
+
+            ofstream outfile(filename, ios::binary);
+
+            if (bytes_read > newline_pos + 1)
+            {
+                outfile.write(buffer + newline_pos + 1, bytes_read - (newline_pos + 1));
+            }
+
+            while ((bytes_read = recv(new_socket, buffer, sizeof(buffer), 0)) > 0)
+            {
+                outfile.write(buffer, bytes_read);
+            }
+            outfile.close();
+            cout << "File Saved!" << std::endl;
+        }
         close(new_socket);
     }
-    close(server_fd);
 }
-
 // main
 
 int main()
