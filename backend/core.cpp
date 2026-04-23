@@ -8,44 +8,85 @@
 #include <ifaddrs.h>
 #include <netdb.h>
 
-
 using namespace std;
 
 string getLocalIP()
 {
-    struct ifaddrs *ifaddr, *ifa;
-    char host[NI_MAXHOST];
+    char buffer[256];
+    string best_ip = "127.0.0.1";
 
-    if (getifaddrs(&ifaddr) == -1)
+    FILE *pipe = popen("ipconfig.exe", "r");
+    if (!pipe)
     {
-        perror("getifaddrs");
-        return "127.0.0.1";
+        return best_ip;
     }
 
-    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+    while (fgets(buffer, sizeof(buffer), pipe) != NULL)
     {
-        if (ifa->ifa_addr == NULL)
-            continue;
+        string line = buffer;
 
-        if (ifa->ifa_addr->sa_family == AF_INET)
+        if (line.find("IPv4") != string::npos)
         {
-            getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
-                        host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
-
-            string ip = host;
-
-            // Skip localhost
-            if (ip != "127.0.0.1")
+            size_t colon_pos = line.find(":");
+            if (colon_pos != string::npos)
             {
-                freeifaddrs(ifaddr);
-                return ip;
+                string ip = line.substr(colon_pos + 1);
+
+                ip.erase(ip.find_last_not_of(" \n\r\t") + 1);
+                ip.erase(0, ip.find_first_not_of(" \n\r\t"));
+
+                if (ip.find("172.") != 0 && ip.find("169.254.") != 0 && ip != "127.0.0.1")
+                {
+                    best_ip = ip;
+
+                    if (best_ip.find("10.") == 0 || best_ip.find("192.168.") == 0)
+                    {
+                        break;
+                    }
+                }
             }
         }
     }
-
-    freeifaddrs(ifaddr);
-    return "127.0.0.1";
+    pclose(pipe);
+    return best_ip;
 }
+
+// on mac
+// string getLocalIP()
+// {
+//     struct ifaddrs *ifaddr, *ifa;
+//     char host[NI_MAXHOST];
+
+//     if (getifaddrs(&ifaddr) == -1)
+//     {
+//         perror("getifaddrs");
+//         return "127.0.0.1";
+//     }
+
+//     for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+//     {
+//         if (ifa->ifa_addr == NULL)
+//             continue;
+
+//         if (ifa->ifa_addr->sa_family == AF_INET)
+//         {
+//             getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+//                         host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+
+//             string ip = host;
+
+//             // Skip localhost
+//             if (ip != "127.0.0.1")
+//             {
+//                 freeifaddrs(ifaddr);
+//                 return ip;
+//             }
+//         }
+//     }
+
+//     freeifaddrs(ifaddr);
+//     return "127.0.0.1";
+// }
 
 // udp broadcaster
 void run_udp_broadcaster()
@@ -57,7 +98,6 @@ void run_udp_broadcaster()
     struct sockaddr_in broadcast_addr;
     broadcast_addr.sin_family = AF_INET;
     broadcast_addr.sin_port = htons(8888);
-    // CHANGE THIS TO 255.255.255.255
     broadcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
 
     string ip = getLocalIP();
@@ -93,7 +133,6 @@ void run_udp_listener()
 
     bind(sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
 
-    // THE NEW FIX: Filter by your computer's name, not IP!
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) != 0)
     {
@@ -109,10 +148,9 @@ void run_udp_listener()
 
         string received_msg(buffer);
 
-        // If the message does NOT contain our own laptop's name, print it!
         if (received_msg.find(my_name) == string::npos)
         {
-            std::cout << "Founded Peer: " << buffer << "\n";
+            cout << "Founded Peer: " << buffer << "\n";
         }
     }
     close(sock);
@@ -125,9 +163,8 @@ void run_tcp_server()
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
     struct sockaddr_in address;
-    // Change this part in core.cpp:
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY); // Ensure Host-to-Network Long conversion
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
     address.sin_port = htons(8080);
     bind(server_fd, (struct sockaddr *)&address, sizeof(address));
     listen(server_fd, 5);
@@ -140,7 +177,6 @@ void run_tcp_server()
         char buffer[1024];
         memset(buffer, 0, 1024);
 
-        // 1. Read the first chunk to get the filename
         int bytes_read = recv(new_socket, buffer, sizeof(buffer) - 1, 0);
         if (bytes_read <= 0)
         {
@@ -148,30 +184,27 @@ void run_tcp_server()
             continue;
         }
 
-        std::string raw_data(buffer, bytes_read);
+        string raw_data(buffer, bytes_read);
         size_t newline_pos = raw_data.find('\n');
 
-        if (newline_pos != std::string::npos)
+        if (newline_pos != string::npos)
         {
-            std::string filename = raw_data.substr(0, newline_pos);
-            std::cout << "📥 Receiving file: " << filename << std::endl;
+            string filename = raw_data.substr(0, newline_pos);
+            cout << "📥 Receiving file: " << filename << endl;
 
-            // Create the file with the REAL name
-            std::ofstream outfile(filename, std::ios::binary);
+            ofstream outfile(filename, ios::binary);
 
-            // Write the "leftover" data from the first chunk (after the \n)
             if (bytes_read > newline_pos + 1)
             {
                 outfile.write(buffer + newline_pos + 1, bytes_read - (newline_pos + 1));
             }
 
-            // 2. Receive the rest of the file
             while ((bytes_read = recv(new_socket, buffer, sizeof(buffer), 0)) > 0)
             {
                 outfile.write(buffer, bytes_read);
             }
             outfile.close();
-            std::cout << "✅ File Saved!" << std::endl;
+            cout << "✅ File Saved!" << endl;
         }
         close(new_socket);
     }
@@ -180,7 +213,7 @@ void run_tcp_server()
 
 int main()
 {
-    std::setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     cout << "LIGHTHOUSE CORE ENGINE STARTED\n";
 
