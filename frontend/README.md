@@ -1,16 +1,31 @@
-# React + Vite
+# Windrop
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Windrop is a React application built with Vite, providing a fast, modern development experience with Hot Module Replacement (HMR) and ESLint for code quality.
 
-Currently, two official plugins are available:
+## Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+* React
+* Vite
+* JavaScript
+* ESLint
+
+## Development
+
+This project uses Vite for fast builds and development.
+
+Currently, two official React plugins are available:
+
+* [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) — Uses **Oxc**
+* [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) — Uses **SWC**
 
 ## React Compiler
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The React Compiler is not enabled by default because it can impact development and build performance. If you'd like to enable it, refer to the official React documentation:
 
-## Expanding the ESLint configuration
+https://react.dev/learn/react-compiler/installation
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## ESLint Configuration
+
+For production applications, consider migrating to TypeScript with type-aware linting enabled. More information is available in the official Vite React TypeScript template:
+
+https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts
