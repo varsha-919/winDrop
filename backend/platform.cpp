@@ -13,6 +13,8 @@
 #include <net/if.h>
 #include <chrono>
 #include <thread>
+#else
+#include <filesystem>
 #endif
 
 // Standard C++ headers
@@ -209,4 +211,122 @@ bool windrop::Convert::stringToAddr(const std::string &ipStr, struct sockaddr_in
 #else
     return inet_pton(AF_INET, ipStr.c_str(), &addr.sin_addr) > 0;
 #endif
+}
+
+// ============================================================================
+// FileUtils Implementation
+// ============================================================================
+
+#include <sys/stat.h>
+#include <fstream>
+
+#ifdef WINDROP_PLATFORM_WINDOWS
+#include <filesystem>
+namespace fs = std::filesystem;
+#else
+#include <sys/types.h>
+#endif
+
+std::string windrop::FileUtils::getTempPath(const std::string &filename)
+{
+    return filename + ".part";
+}
+
+std::string windrop::FileUtils::getMetaPath(const std::string &filename)
+{
+    return filename + ".part.meta";
+}
+
+bool windrop::FileUtils::tempExists(const std::string &filename)
+{
+    std::string tempPath = getTempPath(filename);
+#ifdef WINDROP_PLATFORM_WINDOWS
+    return fs::exists(tempPath);
+#else
+    struct stat buffer;
+    return (stat(tempPath.c_str(), &buffer) == 0);
+#endif
+}
+
+bool windrop::FileUtils::metaExists(const std::string &filename)
+{
+    std::string metaPath = getMetaPath(filename);
+#ifdef WINDROP_PLATFORM_WINDOWS
+    return fs::exists(metaPath);
+#else
+    struct stat buffer;
+    return (stat(metaPath.c_str(), &buffer) == 0);
+#endif
+}
+
+bool windrop::FileUtils::atomicRename(const std::string &tempPath, const std::string &finalPath)
+{
+#ifdef WINDROP_PLATFORM_WINDOWS
+    // Windows: use std::filesystem::rename (which is atomic on Windows)
+    try {
+        fs::rename(tempPath, finalPath);
+        return true;
+    } catch (const fs::system_error& e) {
+        std::cerr << "Rename failed: " << e.what() << std::endl;
+        return false;
+    }
+#else
+    // POSIX: rename() is atomic
+    return rename(tempPath.c_str(), finalPath.c_str()) == 0;
+#endif
+}
+
+bool windrop::FileUtils::cleanupTemp(const std::string &filename)
+{
+    bool success = true;
+    std::string tempPath = getTempPath(filename);
+    std::string metaPath = getMetaPath(filename);
+
+#ifdef WINDROP_PLATFORM_WINDOWS
+    try {
+        if (fs::exists(tempPath)) fs::remove(tempPath);
+        if (fs::exists(metaPath)) fs::remove(metaPath);
+    } catch (const fs::system_error& e) {
+        std::cerr << "Cleanup failed: " << e.what() << std::endl;
+        success = false;
+    }
+#else
+    if (remove(tempPath.c_str()) != 0 && errno != ENOENT) success = false;
+    if (remove(metaPath.c_str()) != 0 && errno != ENOENT) success = false;
+#endif
+
+    return success;
+}
+
+int64_t windrop::FileUtils::getFileSize(const std::string &filepath)
+{
+#ifdef WINDROP_PLATFORM_WINDOWS
+    try {
+        return fs::file_size(filepath);
+    } catch (const fs::system_error& e) {
+        return -1;
+    }
+#else
+    struct stat st;
+    if (stat(filepath.c_str(), &st) == 0) {
+        return st.st_size;
+    }
+    return -1;
+#endif
+}
+
+uint32_t windrop::FileUtils::computeChecksum(const std::string &filepath)
+{
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) return 0;
+
+    uint32_t sum = 0;
+    char buffer[4096];
+    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
+        std::streamsize bytes = file.gcount();
+        for (std::streamsize i = 0; i < bytes; ++i) {
+            sum += static_cast<unsigned char>(buffer[i]);
+        }
+    }
+    return sum;
 }

@@ -154,6 +154,70 @@ namespace windrop
         static bool stringToAddr(const std::string &ipStr, struct sockaddr_in &addr);
     };
 
+    /**
+     * File utility functions for temp file handling and metadata
+     */
+    class FileUtils
+    {
+    public:
+        /**
+         * Get the temporary file path for a given filename
+         * @param filename Original filename
+         * @return Temporary file path (filename.part)
+         */
+        static std::string getTempPath(const std::string &filename);
+
+        /**
+         * Get the metadata file path for a given filename
+         * @param filename Original filename
+         * @return Metadata file path (filename.part.meta)
+         */
+        static std::string getMetaPath(const std::string &filename);
+
+        /**
+         * Check if a temporary file exists
+         * @param filename Original filename
+         * @return true if temp file exists
+         */
+        static bool tempExists(const std::string &filename);
+
+        /**
+         * Check if metadata file exists
+         * @param filename Original filename
+         * @return true if metadata exists
+         */
+        static bool metaExists(const std::string &filename);
+
+        /**
+         * Rename temp file to final file (atomic operation)
+         * @param tempPath Temporary file path
+         * @param finalPath Final file path
+         * @return true if successful
+         */
+        static bool atomicRename(const std::string &tempPath, const std::string &finalPath);
+
+        /**
+         * Delete temp file and metadata
+         * @param filename Original filename
+         * @return true if successful
+         */
+        static bool cleanupTemp(const std::string &filename);
+
+        /**
+         * Get file size
+         * @param filepath Path to file
+         * @return File size in bytes, or -1 on error
+         */
+        static int64_t getFileSize(const std::string &filepath);
+
+        /**
+         * Compute simple checksum (sum of bytes) for verification
+         * @param filepath Path to file
+         * @return Checksum value
+         */
+        static uint32_t computeChecksum(const std::string &filepath);
+    };
+
 } // namespace windrop
 
 #endif // WINDROP_PLATFORM_H

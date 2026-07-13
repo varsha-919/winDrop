@@ -105,15 +105,16 @@ coreEngine.stdout.on("data", (data) => {
 app.post("/send", upload.single("file"), (req, res) => {
   const { targetIp } = req.body;
   const filePath = req.file.path;
+  const fileSize = req.file.size; // Get file size from multer
 
   if (!targetIp) {
     return res.status(400).json({ error: "Target IP missing" });
   }
 
-  console.log(`🚀 Sending ${req.file.originalname} → ${targetIp}`);
+  console.log(`🚀 Sending ${req.file.originalname} (${fileSize} bytes) → ${targetIp}`);
 
-  // 🔥 USE REAL TARGET IP (NOT HARDCODED)
-  const sender = spawn(SENDER, [targetIp, filePath]);
+  // Pass file size to sender for resume metadata support
+  const sender = spawn(SENDER, [targetIp, filePath, fileSize.toString()]);
 
   sender.stdout.on("data", (data) => {
     // Output from sender

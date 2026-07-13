@@ -5,13 +5,21 @@
  * - Windows (WinSock2)
  * - Linux (POSIX sockets)
  * - macOS (POSIX sockets)
+ *
+ * Enhanced with resumable file transfer:
+ * - Temporary file (.part) during transfer
+ * - Metadata persistence for resume capability
+ * - Chunk-based transfer with ACKs
  */
 
 #include <iostream>
 #include <fstream>
 #include <thread>
 #include <cstring>
+#include <sstream>
+#include <algorithm>
 #include "platform.h"
+#include "transfer_meta.h"
 
 using namespace std;
 
@@ -22,7 +30,10 @@ namespace config
     constexpr unsigned short TCP_LISTEN_PORT = 8080;
     constexpr unsigned int BROADCAST_INTERVAL_MS = 2000;
     constexpr int SOCKET_BUFFER_SIZE = 4096;
-    constexpr int FILE_BUFFER_SIZE = 1024;
+    constexpr int FILE_BUFFER_SIZE = 4096;
+    constexpr int CHUNK_SIZE = 4096;
+    constexpr int ACK_TIMEOUT_MS = 5000;
+    constexpr int MAX_RETRIES = 3;
 }
 
 /**
@@ -132,7 +143,7 @@ void runUdpListener()
 }
 
 /**
- * TCP Server - receives files from other peers
+ * TCP Server - receives files from other peers with resume capability
  */
 void runTcpServer()
 {
@@ -183,41 +194,273 @@ void runTcpServer()
             continue;
         }
 
-        char buffer[config::SOCKET_BUFFER_SIZE];
-        memset(buffer, 0, sizeof(buffer));
+        string clientIP = inet_ntoa(clientAddr.sin_addr);
+        cout << "🔗 Client connected: " << clientIP << endl;
 
-        int bytesRead = recv(newSocket, buffer, sizeof(buffer) - 1, 0);
-        if (bytesRead <= 0)
+        // Receive messages in a loop
+        string buffer;
+        bool transferComplete = false;
+        TransferMetadata meta;
+        ofstream outfile;
+        int nextExpectedChunk = 0;
+
+        while (!transferComplete)
         {
-            windrop::SocketUtils::closeSocket(newSocket);
-            continue;
-        }
+            // Read until we have a complete message (newline delimited)
+            char recvBuffer[config::SOCKET_BUFFER_SIZE];
+            int bytesRead = recv(newSocket, recvBuffer, sizeof(recvBuffer) - 1, 0);
 
-        string rawData(buffer, bytesRead);
-        size_t newlinePos = rawData.find('\n');
-
-        if (newlinePos != string::npos)
-        {
-            string filename = rawData.substr(0, newlinePos);
-            cout << "📥 Receiving file: " << filename << endl;
-
-            ofstream outfile(filename, ios::binary);
-
-            // Write any data that came with the header
-            if (bytesRead > static_cast<int>(newlinePos + 1))
+            if (bytesRead <= 0)
             {
-                outfile.write(buffer + newlinePos + 1,
-                              bytesRead - (newlinePos + 1));
+                cout << "⚠️ Connection lost" << endl;
+                // Save state before closing
+                if (outfile.is_open())
+                {
+                    outfile.close();
+                    meta.lastAckedChunk = nextExpectedChunk - 1;
+                    meta.updatedAt = TransferMetadata::getTimestamp();
+                    string metaPath = windrop::FileUtils::getMetaPath(meta.filename);
+                    meta.save(metaPath);
+                    cout << "💾 Transfer state saved (last chunk: " << meta.lastAckedChunk << ")" << endl;
+                }
+                break;
             }
 
-            // Receive file data
-            while ((bytesRead = recv(newSocket, buffer, sizeof(buffer), 0)) > 0)
-            {
-                outfile.write(buffer, bytesRead);
-            }
+            recvBuffer[bytesRead] = '\0';
+            buffer.append(recvBuffer, bytesRead);
 
-            outfile.close();
-            cout << "✅ File saved: " << filename << endl;
+            // Process all complete messages in buffer
+            size_t newlinePos;
+            while ((newlinePos = buffer.find('\n')) != string::npos)
+            {
+                string message = buffer.substr(0, newlinePos);
+                buffer.erase(0, newlinePos + 1);
+
+                // Parse message type and payload
+                string msgType, payload;
+                TransferProtocol::parseMessage(message, msgType, payload);
+
+                // Handle each message type
+                if (msgType == transfer::MSG_HEADER)
+                {
+                    // New transfer request
+                    string filename;
+                    int64_t fileSize;
+                    int chunkSize, totalChunks;
+
+                    if (TransferProtocol::parseHeader(payload, filename, fileSize, chunkSize, totalChunks))
+                    {
+                        cout << "📥 Transfer started: " << filename
+                             << " (" << fileSize << " bytes, "
+                             << totalChunks << " chunks)" << endl;
+
+                        // Check for existing temp file (resume attempt)
+                        string tempPath = windrop::FileUtils::getTempPath(filename);
+                        string metaPath = windrop::FileUtils::getMetaPath(filename);
+
+                        if (windrop::FileUtils::tempExists(filename) &&
+                            windrop::FileUtils::metaExists(filename) &&
+                            meta.load(metaPath))
+                        {
+                            // Validate resume
+                            if (meta.filename == filename &&
+                                meta.fileSize == fileSize &&
+                                meta.lastAckedChunk >= 0)
+                            {
+                                cout << "🔄 Existing transfer found, last chunk: "
+                                     << meta.lastAckedChunk << endl;
+
+                                // Send OK response with last chunk
+                                string response = TransferProtocol::buildResumeResponse(true, meta.lastAckedChunk);
+                                send(newSocket, response.c_str(), response.length(), 0);
+
+                                // Open temp file in append mode
+                                outfile.open(tempPath, ios::binary | ios::app);
+                                nextExpectedChunk = meta.lastAckedChunk + 1;
+
+                                cout << "🔄 Resuming from chunk " << nextExpectedChunk << endl;
+                            }
+                            else
+                            {
+                                // Can't resume - mismatch
+                                cout << "🔄 Resume mismatch, starting fresh" << endl;
+                                windrop::FileUtils::cleanupTemp(filename);
+
+                                outfile.open(tempPath, ios::binary);
+                                nextExpectedChunk = 0;
+
+                                // Send NO response
+                                string response = TransferProtocol::buildResumeResponse(false);
+                                send(newSocket, response.c_str(), response.length(), 0);
+                            }
+                        }
+                        else
+                        {
+                            // Fresh transfer
+                            outfile.open(tempPath, ios::binary);
+                            nextExpectedChunk = 0;
+
+                            // Initialize metadata
+                            meta.filename = filename;
+                            meta.fileSize = fileSize;
+                            meta.chunkSize = chunkSize;
+                            meta.totalChunks = totalChunks;
+                            meta.lastAckedChunk = -1;
+                            meta.createdAt = TransferMetadata::getTimestamp();
+                            meta.updatedAt = meta.createdAt;
+                            meta.senderIP = clientIP;
+                            meta.checksum = 0;
+
+                            // Save initial metadata
+                            meta.save(metaPath);
+
+                            // Send NO response (fresh transfer)
+                            string response = TransferProtocol::buildResumeResponse(false);
+                            send(newSocket, response.c_str(), response.length(), 0);
+
+                            cout << "📤 Waiting for chunks..." << endl;
+                        }
+                    }
+                }
+                else if (msgType == transfer::MSG_RESUME_QUERY)
+                {
+                    // Resume query from sender
+                    string filename;
+                    int64_t fileSize;
+
+                    if (TransferProtocol::parseResumeQuery(payload, filename, fileSize))
+                    {
+                        string metaPath = windrop::FileUtils::getMetaPath(filename);
+
+                        if (windrop::FileUtils::tempExists(filename) &&
+                            meta.load(metaPath) &&
+                            meta.filename == filename &&
+                            meta.fileSize == fileSize &&
+                            meta.lastAckedChunk >= 0)
+                        {
+                            // Can resume
+                            string response = TransferProtocol::buildResumeResponse(true, meta.lastAckedChunk);
+                            send(newSocket, response.c_str(), response.length(), 0);
+
+                            cout << "📋 Resume query: OK, last chunk " << meta.lastAckedChunk << endl;
+                        }
+                        else
+                        {
+                            // Can't resume
+                            string response = TransferProtocol::buildResumeResponse(false);
+                            send(newSocket, response.c_str(), response.length(), 0);
+
+                            cout << "📋 Resume query: NO (no existing transfer)" << endl;
+                        }
+                    }
+                }
+                else if (msgType == transfer::MSG_CHUNK)
+                {
+                    // Chunk data received
+                    size_t pipePos = payload.find(transfer::FIELD_DELIMITER);
+                    if (pipePos != string::npos)
+                    {
+                        int chunkIndex;
+                        try
+                        {
+                            chunkIndex = stoi(payload.substr(0, pipePos));
+                        }
+                        catch (...)
+                        {
+                            continue;
+                        }
+
+                        string chunkData = payload.substr(pipePos + 1);
+                        int chunkDataSize = static_cast<int>(chunkData.size());
+
+                        // Validate chunk
+                        if (chunkIndex < nextExpectedChunk)
+                        {
+                            // Duplicate or late chunk - send ACK anyway
+                            cout << "🔄 Duplicate chunk " << chunkIndex << " (expected " << nextExpectedChunk << ")" << endl;
+                        }
+                        else if (chunkIndex > nextExpectedChunk)
+                        {
+                            // Out of order - gap, request retransmission
+                            cout << "⚠️ Out of order chunk " << chunkIndex << " (expected " << nextExpectedChunk << ")" << endl;
+                            continue;
+                        }
+                        else
+                        {
+                            // Correct chunk - write to file
+                            outfile.write(chunkData.c_str(), chunkDataSize);
+                            nextExpectedChunk++;
+
+                            cout << "📦 Chunk " << chunkIndex << " received" << endl;
+                        }
+
+                        // Send ACK
+                        string ack = TransferProtocol::buildAck(chunkIndex);
+                        send(newSocket, ack.c_str(), ack.length(), 0);
+
+                        // Update metadata periodically (every 10 chunks)
+                        if (nextExpectedChunk % 10 == 0)
+                        {
+                            meta.lastAckedChunk = nextExpectedChunk - 1;
+                            meta.updatedAt = TransferMetadata::getTimestamp();
+                            string metaPath = windrop::FileUtils::getMetaPath(meta.filename);
+                            meta.save(metaPath);
+                            cout << "💾 Progress saved (chunk " << meta.lastAckedChunk << ")" << endl;
+                        }
+                    }
+                }
+                else if (msgType == transfer::MSG_COMPLETE)
+                {
+                    // Transfer complete
+                    uint32_t receivedChecksum = 0;
+                    try
+                    {
+                        receivedChecksum = static_cast<uint32_t>(stoul(payload));
+                    }
+                    catch (...)
+                    {
+                        receivedChecksum = 0;
+                    }
+
+                    outfile.close();
+
+                    // Compute actual checksum
+                    string tempPath = windrop::FileUtils::getTempPath(meta.filename);
+                    uint32_t actualChecksum = windrop::FileUtils::computeChecksum(tempPath);
+
+                    if (receivedChecksum == actualChecksum)
+                    {
+                        // Rename temp to final
+                        string finalPath = meta.filename;
+                        if (windrop::FileUtils::atomicRename(tempPath, finalPath))
+                        {
+                            // Clean up metadata
+                            windrop::FileUtils::cleanupTemp(meta.filename);
+                            cout << "✅ Transfer completed and verified (" << actualChecksum << ")" << endl;
+                            cout << "📁 File saved as: " << finalPath << endl;
+                        }
+                        else
+                        {
+                            cout << "❌ Failed to rename temp file" << endl;
+                        }
+                    }
+                    else
+                    {
+                        cout << "❌ Checksum mismatch! Expected: " << receivedChecksum
+                             << ", Got: " << actualChecksum << endl;
+                        // Keep temp file for debugging
+                    }
+
+                    transferComplete = true;
+                }
+                else if (msgType == transfer::MSG_RESET)
+                {
+                    // Sender requested reset
+                    cout << "🔄 Reset requested: " << payload << endl;
+                    windrop::FileUtils::cleanupTemp(meta.filename);
+                    transferComplete = true;
+                }
+            }
         }
 
         windrop::SocketUtils::closeSocket(newSocket);
