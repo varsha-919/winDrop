@@ -213,7 +213,8 @@ void runTcpServer()
 
             if (bytesRead <= 0)
             {
-                cout << "⚠️ Connection lost" << endl;
+                cout << "⚠️ Connection lost (error: " << (bytesRead == 0 ? "closed" : strerror(errno))
+                     << ", last chunk: " << nextExpectedChunk << ")" << endl;
                 // Save state before closing
                 if (outfile.is_open())
                 {

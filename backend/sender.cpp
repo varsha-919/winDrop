@@ -106,13 +106,11 @@ bool sendChunkWithAck(WindropSocket sock, int chunkIndex, const char *data, int 
 {
     // Build chunk message
     string chunkMsg = TransferProtocol::buildChunk(chunkIndex, data, size);
-    cout << ">>> Sending chunk " << chunkIndex << " (" << size << " bytes)" << endl;
 
     // Send chunk
     int sent = send(sock, chunkMsg.c_str(), chunkMsg.length(), 0);
     if (sent < 0)
     {
-        cerr << "Failed to send chunk " << chunkIndex << endl;
         return false;
     }
 
@@ -123,8 +121,6 @@ bool sendChunkWithAck(WindropSocket sock, int chunkIndex, const char *data, int 
     int bytesRead = recv(sock, ackBuffer, sizeof(ackBuffer) - 1, 0);
     if (bytesRead <= 0)
     {
-        // Timeout
-        cerr << "Timeout waiting for ACK on chunk " << chunkIndex << endl;
         return false;
     }
 
@@ -251,7 +247,7 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
     int respLen = recv(sock, responseBuf, sizeof(responseBuf) - 1, 0);
     if (respLen <= 0)
     {
-        cerr << "Failed to get resume response (timeout or error)" << endl;
+        cerr << "Failed to get header response (timeout or error)" << endl;
         windrop::SocketUtils::closeSocket(sock);
         return 1;
     }
@@ -366,7 +362,6 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
     string completeMsg = TransferProtocol::buildComplete(checksum);
     if (send(sock, completeMsg.c_str(), completeMsg.length(), 0) < 0)
     {
-        cerr << "Failed to send complete message" << endl;
         windrop::SocketUtils::closeSocket(sock);
         return 1;
     }
