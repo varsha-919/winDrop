@@ -203,10 +203,6 @@ std::string windrop::NetworkUtils::getLocalIP()
 
 bool windrop::Convert::stringToAddr(const std::string &ipStr, struct sockaddr_in &addr)
 {
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(0); // Port will be set separately
-
 #ifdef WINDROP_PLATFORM_WINDOWS
     addr.sin_addr.s_addr = inet_addr(ipStr.c_str());
     return addr.sin_addr.s_addr != INADDR_NONE;

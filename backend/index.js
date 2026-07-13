@@ -42,8 +42,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
+const path = require("path");
+
+const CORE =
+  process.platform === "win32"
+    ? path.join(__dirname, "core.exe")
+    : path.join(__dirname, "core");
+
+const SENDER =
+  process.platform === "win32"
+    ? path.join(__dirname, "sender.exe")
+    : path.join(__dirname, "sender");
+
 // --- SPAWN CORE ENGINE ---
-const coreEngine = spawn("./core");
+const coreEngine = spawn(CORE);
 
 coreEngine.stdout.on("data", (data) => {
   // When C++ core prints to stdout, this fires
@@ -54,8 +66,8 @@ coreEngine.stdout.on("data", (data) => {
   const lines = data.toString().trim().split("\n");
 
   lines.forEach((line) => {
-    if (line.includes("Founded Peer:")) {
-      const parts = line.split("Founded Peer: ");
+    if (line.includes("Discovered peer:")) {
+      const parts = line.split("Discovered peer: ");
 
       if (parts.length > 1) {
         const raw = parts[1].replace(" Alive", "").trim();
@@ -68,6 +80,8 @@ coreEngine.stdout.on("data", (data) => {
 
           // 🔥 STORE UNIQUE
           peers.set(ip, name);
+          console.log("Map size:", peers.size);
+          console.log("Peers map:", Array.from(peers.entries()));
 
           const peerList = Array.from(peers.entries()).map(([ip, name]) => ({
             name,
@@ -77,6 +91,7 @@ coreEngine.stdout.on("data", (data) => {
           console.log("🟢 Active Devices:", peerList);
 
           // 🔥 SEND FULL LIST
+          console.log("Emitting peers_list:", peerList);
           io.emit("peers_list", peerList);
         }
       }
@@ -98,17 +113,20 @@ app.post("/send", upload.single("file"), (req, res) => {
   console.log(`🚀 Sending ${req.file.originalname} → ${targetIp}`);
 
   // 🔥 USE REAL TARGET IP (NOT HARDCODED)
-  const sender = spawn("./sender", [targetIp, filePath]);
+  const sender = spawn(SENDER, [targetIp, filePath]);
 
-  sender.stdout.on("data", (data) => { // Output from sender
+  sender.stdout.on("data", (data) => {
+    // Output from sender
     console.log(`📤 [SENDER]: ${data.toString()}`);
   });
 
-  sender.stderr.on("data", (data) => { // Error output
+  sender.stderr.on("data", (data) => {
+    // Error output
     console.error(`❌ [SENDER ERROR]: ${data.toString()}`);
   });
 
-  sender.on("close", (code) => { // When process exits code: 0 = success, non-zero = error
+  sender.on("close", (code) => {
+    // When process exits code: 0 = success, non-zero = error
     console.log(`🏁 Sender finished (Code: ${code})`);
 
     if (fs.existsSync(filePath)) {
@@ -135,6 +153,6 @@ io.on("connection", (socket) => {
   socket.emit("peers_list", peerList);
 });
 
-server.listen(5000, () =>
-  console.log("✅ Lighthouse Backend at http://localhost:5000"),
+server.listen(5001, () =>
+  console.log("✅ Lighthouse Backend at http://localhost:5001"),
 );

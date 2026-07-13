@@ -90,13 +90,7 @@ fi
 echo ""
 echo ">>> Starting Backend Services"
 
-# Start core engine in background
-if [ -f "core.exe" ]; then
-    ./core.exe &
-else
-    ./core &
-fi
-CORE_PID=$!
+
 
 # Start Node.js server in background
 node index.js &

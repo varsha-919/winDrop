@@ -54,7 +54,11 @@ int sendFile(const string &targetIp, const string &filePath)
     // Connect to receiver
     if (connect(sock, (struct sockaddr *)&servAddr, sizeof(servAddr)) < 0)
     {
-        cerr << "❌ Connection failed. Is the receiver running?" << endl;
+#ifdef _WIN32
+        cerr << "Connection failed. WSA Error: " << WSAGetLastError() << endl;
+#else
+        perror("connect");
+#endif
         windrop::SocketUtils::closeSocket(sock);
         return 1;
     }

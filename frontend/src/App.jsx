@@ -3,7 +3,7 @@ import io from "socket.io-client";
 import axios from "axios";
 import "./App.css";
 
-const socket = io(`http://${window.location.hostname}:5000`);
+const socket = io(`http://${window.location.hostname}:5001`);
 
 function App() {
   const [peers, setPeers] = useState([]);
@@ -73,7 +73,7 @@ function App() {
 
     try {
       await axios.post(
-        `http://${window.location.hostname}:5000/send`,
+        `http://${window.location.hostname}:5001/send`,
         formData,
       );
       setSendStatus({ success: true, ip: targetIp });
