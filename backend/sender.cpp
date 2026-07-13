@@ -49,10 +49,14 @@ bool sendAndWait(WindropSocket sock, const string &message, string &response, in
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
-    // Send message
-    if (send(sock, message.c_str(), message.length(), 0) < 0)
+    // Send message - but skip if empty (just wait for response in that case)
+    if (!message.empty())
     {
-        return false;
+        int sent = send(sock, message.c_str(), message.length(), 0);
+        if (sent < 0)
+        {
+            return false;
+        }
     }
 
     // Wait for response
@@ -60,6 +64,7 @@ bool sendAndWait(WindropSocket sock, const string &message, string &response, in
     memset(buffer, 0, sizeof(buffer));
 
     int bytesRead = recv(sock, buffer, sizeof(buffer) - 1, 0);
+
     if (bytesRead <= 0)
     {
         return false;
@@ -101,9 +106,11 @@ bool sendChunkWithAck(WindropSocket sock, int chunkIndex, const char *data, int 
 {
     // Build chunk message
     string chunkMsg = TransferProtocol::buildChunk(chunkIndex, data, size);
+    cout << ">>> Sending chunk " << chunkIndex << " (" << size << " bytes)" << endl;
 
     // Send chunk
-    if (send(sock, chunkMsg.c_str(), chunkMsg.length(), 0) < 0)
+    int sent = send(sock, chunkMsg.c_str(), chunkMsg.length(), 0);
+    if (sent < 0)
     {
         cerr << "Failed to send chunk " << chunkIndex << endl;
         return false;
@@ -117,6 +124,7 @@ bool sendChunkWithAck(WindropSocket sock, int chunkIndex, const char *data, int 
     if (bytesRead <= 0)
     {
         // Timeout
+        cerr << "Timeout waiting for ACK on chunk " << chunkIndex << endl;
         return false;
     }
 
@@ -235,30 +243,41 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
 
     // Send HEADER message
     string header = TransferProtocol::buildHeader(filename, fileSize, chunkSize, totalChunks);
-    if (send(sock, header.c_str(), header.length(), 0) < 0)
-    {
-        cerr << "Failed to send header" << endl;
-        windrop::SocketUtils::closeSocket(sock);
-        return 1;
-    }
+    send(sock, header.c_str(), header.length(), 0);
 
-    // Wait for resume response
-    string response;
-    if (!sendAndWait(sock, "", response, config::SOCKET_TIMEOUT_MS))
+    // Wait for resume response using a simple recv
+    char responseBuf[512];
+    setSocketTimeout(sock, config::SOCKET_TIMEOUT_MS);
+    int respLen = recv(sock, responseBuf, sizeof(responseBuf) - 1, 0);
+    if (respLen <= 0)
     {
-        cerr << "Failed to get resume response" << endl;
+        cerr << "Failed to get resume response (timeout or error)" << endl;
         windrop::SocketUtils::closeSocket(sock);
         return 1;
     }
+    responseBuf[respLen] = '\0';
+
+    string headerResponse(responseBuf, respLen);
+    // Remove trailing newline
+    if (!headerResponse.empty() && headerResponse.back() == '\n')
+        headerResponse.pop_back();
+
+    // Extract payload from message (everything after the colon)
+    size_t colonPos = headerResponse.find(':');
+    string headerPayload = (colonPos != string::npos) ? headerResponse.substr(colonPos + 1) : headerResponse;
 
     bool canResume = false;
     int startChunk = 0;
-    TransferProtocol::parseResumeResponse(response, canResume, startChunk);
+    TransferProtocol::parseResumeResponse(headerPayload, canResume, startChunk);
 
     if (canResume)
     {
         startChunk = startChunk + 1; // Continue from next chunk
         cout << "🔄 Receiver accepted resume from chunk " << startChunk << endl;
+    }
+    else
+    {
+        startChunk = 0; // Fresh transfer starts from chunk 0
     }
 
     // Open file for reading
@@ -270,8 +289,24 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         return 1;
     }
 
-    // Seek to start position
-    infile.seekg(startChunk * chunkSize, ios::beg);
+    // Seek to start position (only if resuming with more chunks to send)
+    if (startChunk > 0)
+    {
+        infile.seekg(startChunk * chunkSize, ios::beg);
+
+        // Try to read a small amount to check if there's data left
+        char testBuffer[1];
+        infile.read(testBuffer, 1);
+        if (infile.gcount() == 0 || infile.eof() || !infile.good())
+        {
+            cout << "✅ File already complete (nothing to resume)" << endl;
+            infile.close();
+            windrop::SocketUtils::closeSocket(sock);
+            return 0;
+        }
+        // Put back the character we read (seek back by 1)
+        infile.seekg(-1, ios::cur);
+    }
 
     // Send chunks
     char buffer[config::FILE_BUFFER_SIZE];

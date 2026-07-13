@@ -16,6 +16,7 @@
 #include <fstream>
 #include <thread>
 #include <cstring>
+
 #include <sstream>
 #include <algorithm>
 #include "platform.h"
@@ -231,10 +232,65 @@ void runTcpServer()
 
             // Process all complete messages in buffer
             size_t newlinePos;
-            while ((newlinePos = buffer.find('\n')) != string::npos)
+            while (true)
             {
-                string message = buffer.substr(0, newlinePos);
-                buffer.erase(0, newlinePos + 1);
+                // Find first newline to peek at message header
+                newlinePos = buffer.find('\n');
+                if (newlinePos == string::npos)
+                    break;
+
+                // Peek at the message to check if it's a CHUNK
+                string peekMsg = buffer.substr(0, newlinePos);
+                string peekType, peekPayload;
+                TransferProtocol::parseMessage(peekMsg, peekType, peekPayload);
+
+                // For CHUNK messages, we need to wait for the full data (not just to first \n)
+                string message;
+                if (peekType == transfer::MSG_CHUNK)
+                {
+                    // Parse the header to get expected data size
+                    size_t pipePos = peekPayload.find(transfer::FIELD_DELIMITER);
+                    if (pipePos != string::npos)
+                    {
+                        try
+                        {
+                            // Payload format: index|size
+                            int chunkDataSize = stoi(peekPayload.substr(pipePos + 1));
+                            // Total message = message up to \n + \n + data
+                            // peekMsg includes everything up to first \n
+                            // We need peekMsg.length() + 1 (for \n) + chunkDataSize
+                            size_t totalNeeded = peekMsg.length() + 1 + chunkDataSize;
+
+                            if (buffer.size() < totalNeeded)
+                            {
+                                // Not enough data yet, wait for more
+                                break;
+                            }
+
+                            // Extract full CHUNK message including data
+                            message = buffer.substr(0, totalNeeded);
+                            buffer.erase(0, totalNeeded);
+                        }
+                        catch (...)
+                        {
+                            // Fall back to normal processing
+                            message = buffer.substr(0, newlinePos);
+                            buffer.erase(0, newlinePos + 1);
+                        }
+                    }
+                    else
+                    {
+                        // Can't parse, use normal processing
+                        message = buffer.substr(0, newlinePos);
+                        buffer.erase(0, newlinePos + 1);
+                    }
+                }
+                else
+                {
+                    // Normal message - extract up to newline
+                    message = buffer.substr(0, newlinePos);
+                    buffer.erase(0, newlinePos + 1);
+                }
 
                 // Parse message type and payload
                 string msgType, payload;
@@ -356,22 +412,30 @@ void runTcpServer()
                 }
                 else if (msgType == transfer::MSG_CHUNK)
                 {
-                    // Chunk data received
+                    // Chunk data received - format: index|size\ndata
+                    // (with my fix, payload now includes the data after \n)
                     size_t pipePos = payload.find(transfer::FIELD_DELIMITER);
-                    if (pipePos != string::npos)
+                    size_t newlinePos = payload.find('\n');
+                    if (pipePos != string::npos && newlinePos != string::npos)
                     {
                         int chunkIndex;
+                        int chunkDataSize;
                         try
                         {
                             chunkIndex = stoi(payload.substr(0, pipePos));
+                            chunkDataSize = stoi(payload.substr(pipePos + 1, newlinePos - pipePos - 1));
                         }
                         catch (...)
                         {
+                            cout << "!!! Failed to parse chunk header" << endl;
                             continue;
                         }
 
-                        string chunkData = payload.substr(pipePos + 1);
-                        int chunkDataSize = static_cast<int>(chunkData.size());
+                        // Extract data after the newline - use all remaining data in payload
+                        // This handles the case where the declared size includes trailing newlines
+                        // that aren't part of the actual data we extract
+                        string chunkData = payload.substr(newlinePos + 1);
+                        int actualSize = static_cast<int>(chunkData.size());
 
                         // Validate chunk
                         if (chunkIndex < nextExpectedChunk)
@@ -388,10 +452,10 @@ void runTcpServer()
                         else
                         {
                             // Correct chunk - write to file
-                            outfile.write(chunkData.c_str(), chunkDataSize);
+                            outfile.write(chunkData.c_str(), actualSize);
                             nextExpectedChunk++;
 
-                            cout << "📦 Chunk " << chunkIndex << " received" << endl;
+                            cout << "📦 Chunk " << chunkIndex << " received (" << actualSize << " bytes)" << endl;
                         }
 
                         // Send ACK

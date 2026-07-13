@@ -193,7 +193,7 @@ public:
 
     /**
      * Build HEADER message
-     * Format: HEADER:filename|filesize|chunksize|totalChunks
+     * Format: HEADER:filename|filesize|chunksize|totalChunks\n
      */
     static std::string buildHeader(const std::string &filename, int64_t fileSize, int chunkSize, int totalChunks)
     {
@@ -202,7 +202,7 @@ public:
             << filename << transfer::FIELD_DELIMITER
             << fileSize << transfer::FIELD_DELIMITER
             << chunkSize << transfer::FIELD_DELIMITER
-            << totalChunks;
+            << totalChunks << "\n";
         return oss.str();
     }
 
@@ -234,14 +234,14 @@ public:
 
     /**
      * Build RESUME_QUERY message
-     * Format: RESUME_QUERY:filename|filesize
+     * Format: RESUME_QUERY:filename|filesize\n
      */
     static std::string buildResumeQuery(const std::string &filename, int64_t fileSize)
     {
         std::ostringstream oss;
         oss << transfer::MSG_RESUME_QUERY << ":"
             << filename << transfer::FIELD_DELIMITER
-            << fileSize;
+            << fileSize << "\n";
         return oss.str();
     }
 
@@ -269,7 +269,7 @@ public:
 
     /**
      * Build RESUME_RESPONSE message
-     * Format: RESUME_RESPONSE:OK|lastChunk or RESUME_RESPONSE:NO
+     * Format: RESUME_RESPONSE:OK|lastChunk\n or RESUME_RESPONSE:NO\n
      */
     static std::string buildResumeResponse(bool canResume, int lastChunk = -1)
     {
@@ -283,6 +283,7 @@ public:
         {
             oss << transfer::RESUME_NO;
         }
+        oss << "\n";
         return oss.str();
     }
 
@@ -318,12 +319,13 @@ public:
 
     /**
      * Build CHUNK message
-     * Format: CHUNK:index|data
+     * Format: CHUNK:index|size\ndata
+     * Note: size is included so receiver knows exact byte count (handles binary data with \n)
      */
     static std::string buildChunk(int index, const char *data, int size)
     {
         std::ostringstream oss;
-        oss << transfer::MSG_CHUNK << ":" << index << transfer::FIELD_DELIMITER;
+        oss << transfer::MSG_CHUNK << ":" << index << transfer::FIELD_DELIMITER << size << "\n";
         std::string result = oss.str();
         result.append(data, size);
         return result;
@@ -351,12 +353,12 @@ public:
 
     /**
      * Build ACK message
-     * Format: ACK:index
+     * Format: ACK:index\n
      */
     static std::string buildAck(int index)
     {
         std::ostringstream oss;
-        oss << transfer::MSG_ACK << ":" << index;
+        oss << transfer::MSG_ACK << ":" << index << "\n";
         return oss.str();
     }
 
@@ -378,34 +380,34 @@ public:
 
     /**
      * Build COMPLETE message
-     * Format: COMPLETE:checksum
+     * Format: COMPLETE:checksum\n
      */
     static std::string buildComplete(uint32_t checksum)
     {
         std::ostringstream oss;
-        oss << transfer::MSG_COMPLETE << ":" << checksum;
+        oss << transfer::MSG_COMPLETE << ":" << checksum << "\n";
         return oss.str();
     }
 
     /**
      * Build RESET message
-     * Format: RESET:reason
+     * Format: RESET:reason\n
      */
     static std::string buildReset(const std::string &reason)
     {
         std::ostringstream oss;
-        oss << transfer::MSG_RESET << ":" << reason;
+        oss << transfer::MSG_RESET << ":" << reason << "\n";
         return oss.str();
     }
 
     /**
      * Build ERROR message
-     * Format: ERROR:message
+     * Format: ERROR:message\n
      */
     static std::string buildError(const std::string &message)
     {
         std::ostringstream oss;
-        oss << transfer::MSG_ERROR << ":" << message;
+        oss << transfer::MSG_ERROR << ":" << message << "\n";
         return oss.str();
     }
 };
