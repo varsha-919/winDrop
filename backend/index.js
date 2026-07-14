@@ -394,6 +394,50 @@ io.on("connection", (socket) => {
         for (const [sockId, sock] of io.sockets.sockets) {
           console.log(`      ${sockId}: ip=${sock.ip}`);
         }
+
+        // 🔥 Check if any peer with this IP exists in our peer list
+        // Even if Socket.IO disconnected, peer might still be reachable
+        const peerExists = peers.has(cleanTargetIp);
+        console.log(`   📡 Peer in UDP list: ${peerExists ? 'YES' : 'NO'}`);
+
+        if (peerExists) {
+          console.log(`   ⚠️ Peer is in peer list but Socket.IO disconnected. Retrying in 2s...`);
+          // Give receiver time to reconnect
+          setTimeout(() => {
+            // Try again
+            for (const [sockId, sock] of io.sockets.sockets) {
+              if (sock.ip === cleanTargetIp) {
+                console.log(`   ✅ Receiver reconnected! Emitting...`);
+                io.to(sockId).emit("incoming_request", {
+                  requestId,
+                  senderName: senderName,
+                  senderIp: socket.ip,
+                  filename,
+                  fileSize,
+                  fileType,
+                });
+                // Set timeout
+                const timeout = setTimeout(() => {
+                  if (pendingRequests.has(requestId)) {
+                    pendingRequests.delete(requestId);
+                    socket.emit("request_rejected", { requestId, reason: "Request timed out" });
+                  }
+                }, 30000);
+                requestTimeouts.set(requestId, timeout);
+                socket.emit("request_queued", { requestId });
+                return;
+              }
+            }
+            // Still not connected after retry
+            socket.emit("request_rejected", { requestId, reason: "Receiver disconnected" });
+            pendingRequests.delete(requestId);
+          }, 2000);
+
+          console.log("========== END DEBUG (will retry) ==========");
+          socket.emit("request_queued", { requestId });
+          return;
+        }
+
         console.log("========== END DEBUG ==========");
 
         // Notify sender that receiver is offline
