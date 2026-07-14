@@ -522,9 +522,9 @@ int main(int argc, char *argv[])
     if (argc >= 2 && string(argv[1]) == "--request")
     {
         requestMode = true;
-        argOffset = 2;
+        argOffset = 1;  // Skip the --request flag
 
-        if (argc < 4)
+        if (argc < 5)
         {
             cerr << "Usage: ./sender --request <target_ip> <request_id> <file_path> [file_size]" << endl;
             windrop::Platform::cleanup();
@@ -533,8 +533,8 @@ int main(int argc, char *argv[])
     }
 
     // Validate arguments
-    int minArgs = requestMode ? 4 : 3;
-    if (argc < minArgs + argOffset)
+    int minArgs = requestMode ? 5 : 3;
+    if (argc < minArgs)
     {
         if (requestMode)
         {
@@ -549,14 +549,33 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    string targetIp = argv[1 + argOffset];
-    string filePath = argv[2 + argOffset];
+    // Parse arguments based on mode
+    string targetIp;
+    string filePath;
     int64_t fileSize = -1;
 
     if (requestMode)
     {
-        requestId = argv[2 + argOffset];
-        filePath = argv[3 + argOffset];
+        // argv: [0]=program, [1]=--request, [2]=targetIp, [3]=requestId, [4]=filePath, [5]=fileSize
+        targetIp = argv[2];
+        requestId = argv[3];
+        filePath = argv[4];
+        if (argc >= 6)
+        {
+            try { fileSize = stoll(argv[5]); }
+            catch (...) { fileSize = -1; }
+        }
+    }
+    else
+    {
+        // argv: [0]=program, [1]=targetIp, [2]=filePath, [3]=fileSize
+        targetIp = argv[1];
+        filePath = argv[2];
+        if (argc >= 4)
+        {
+            try { fileSize = stoll(argv[3]); }
+            catch (...) { fileSize = -1; }
+        }
     }
 
     // Parse optional file size

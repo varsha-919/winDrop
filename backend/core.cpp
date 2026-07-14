@@ -77,7 +77,6 @@ void runUdpBroadcaster()
         windrop::SleepUtils::sleep(config::BROADCAST_INTERVAL_MS);
     }
 
-
     windrop::SocketUtils::closeSocket(sock);
 }
 
