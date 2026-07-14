@@ -26,6 +26,13 @@ const myIps = getMyIPs();
 app.use(cors());
 app.use(express.json());
 
+// Return this machine's LAN IP
+app.get("/my-ip", (req, res) => {
+  res.json({
+    ip: myIps[0] || "127.0.0.1",
+  });
+});
+
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
@@ -171,7 +178,9 @@ app.post("/send-request", (req, res) => {
 
   // Check if target is online
   if (!peers.has(targetIp)) {
-    return res.status(404).json({ error: "Target device not found on network" });
+    return res
+      .status(404)
+      .json({ error: "Target device not found on network" });
   }
 
   console.log(`📨 Sending transfer request: ${filename} to ${targetIp}`);
@@ -230,7 +239,9 @@ app.post("/start-transfer", (req, res) => {
   // Get the uploaded file from storage
   const uploadedFile = uploadedFiles.get(target);
   if (!uploadedFile) {
-    return res.status(404).json({ error: "File not found - please upload first" });
+    return res
+      .status(404)
+      .json({ error: "File not found - please upload first" });
   }
 
   const { filePath, fileSize, filename } = uploadedFile;
@@ -295,7 +306,9 @@ io.on("connection", (socket) => {
     // Get sender info
     const senderName = peers.get(socket.handshake.address) || "Unknown";
 
-    console.log(`📨 Transfer request: ${filename} (${fileSize} bytes) from ${targetIp}`);
+    console.log(
+      `📨 Transfer request: ${filename} (${fileSize} bytes) from ${targetIp}`,
+    );
 
     // Store pending request with socket ID for direct response
     pendingRequests.set(requestId, {
@@ -325,7 +338,10 @@ io.on("connection", (socket) => {
     const timeout = setTimeout(() => {
       if (pendingRequests.has(requestId)) {
         pendingRequests.delete(requestId);
-        socket.emit("request_rejected", { requestId, reason: "Request timed out" });
+        socket.emit("request_rejected", {
+          requestId,
+          reason: "Request timed out",
+        });
       }
     }, 30000);
     requestTimeouts.set(requestId, timeout);
@@ -358,7 +374,10 @@ io.on("connection", (socket) => {
 
     // 🔥 Notify sender directly via socket ID
     if (request.senderSocketId) {
-      io.to(request.senderSocketId).emit("request_accepted", { requestId, targetIp: request.targetIp });
+      io.to(request.senderSocketId).emit("request_accepted", {
+        requestId,
+        targetIp: request.targetIp,
+      });
     } else {
       // Fallback: emit to all
       io.emit("request_accepted", { requestId, targetIp: request.targetIp });
@@ -368,7 +387,9 @@ io.on("connection", (socket) => {
   // 🔥 HANDLE TRANSFER REJECT (from receiver)
   socket.on("transfer_reject", (data) => {
     const { requestId, senderIp, reason } = data;
-    console.log(`❌ Transfer rejected: ${requestId} - ${reason || "Rejected by user"}`);
+    console.log(
+      `❌ Transfer rejected: ${requestId} - ${reason || "Rejected by user"}`,
+    );
 
     const request = pendingRequests.get(requestId);
     if (!request) return;
@@ -386,7 +407,10 @@ io.on("connection", (socket) => {
     request.rejectReason = reason;
 
     // Notify sender
-    io.to(senderIp).emit("request_rejected", { requestId, reason: reason || "Rejected by user" });
+    io.to(senderIp).emit("request_rejected", {
+      requestId,
+      reason: reason || "Rejected by user",
+    });
 
     // Clean up
     pendingRequests.delete(requestId);

@@ -26,8 +26,23 @@ function App() {
 
   // 🔥 REGISTER THIS CLIENT'S IP
   useEffect(() => {
-    const myIp = window.location.hostname;
-    socket.emit("register", { ip: myIp });
+    const registerClient = async () => {
+      try {
+        const res = await axios.get(
+          `http://${window.location.hostname}:5001/my-ip`,
+        );
+
+        socket.emit("register", {
+          ip: res.data.ip,
+        });
+
+        console.log("Registered with:", res.data.ip);
+      } catch (err) {
+        console.error("Registration failed:", err);
+      }
+    };
+
+    registerClient();
 
     socket.on("peers_list", (peerList) => {
       setPeers(peerList);
@@ -105,7 +120,7 @@ function App() {
     try {
       await axios.post(
         `http://${window.location.hostname}:5001/start-transfer`,
-        { requestId, targetIp }
+        { requestId, targetIp },
       );
       // Status will be updated via socket events
     } catch (err) {
@@ -226,9 +241,7 @@ function App() {
 
   const getDropContent = () => {
     if (isDragging) {
-      return (
-        <span className="drop-text-highlight">Drop to send</span>
-      );
+      return <span className="drop-text-highlight">Drop to send</span>;
     }
     if (selectedFile) {
       return (
@@ -260,7 +273,8 @@ function App() {
   const formatFileSize = (bytes) => {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + " MB";
+    if (bytes < 1024 * 1024 * 1024)
+      return (bytes / 1024 / 1024).toFixed(2) + " MB";
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
   };
 
@@ -269,17 +283,46 @@ function App() {
     const ext = filename.split(".").pop()?.toLowerCase();
     const iconMap = {
       pdf: "📄",
-      doc: "📝", docx: "📝",
-      xls: "📊", xlsx: "📊",
-      ppt: "📽️", pptx: "📽️",
+      doc: "📝",
+      docx: "📝",
+      xls: "📊",
+      xlsx: "📊",
+      ppt: "📽️",
+      pptx: "📽️",
       txt: "📃",
-      zip: "📦", rar: "📦", "7z": "📦",
-      jpg: "🖼️", jpeg: "🖼️", png: "🖼️", gif: "🖼️", webp: "🖼️", svg: "🖼️",
-      mp3: "🎵", wav: "🎵", flac: "🎵", aac: "🎵",
-      mp4: "🎬", mkv: "🎬", avi: "🎬", mov: "🎬", webm: "🎬",
-      exe: "⚙️", msi: "⚙️", dmg: "💿", deb: "📦", rpm: "📦",
-      js: "💻", ts: "💻", py: "💻", java: "💻", cpp: "💻", c: "💻",
-      html: "🌐", css: "🎨", json: "📋", xml: "📋",
+      zip: "📦",
+      rar: "📦",
+      "7z": "📦",
+      jpg: "🖼️",
+      jpeg: "🖼️",
+      png: "🖼️",
+      gif: "🖼️",
+      webp: "🖼️",
+      svg: "🖼️",
+      mp3: "🎵",
+      wav: "🎵",
+      flac: "🎵",
+      aac: "🎵",
+      mp4: "🎬",
+      mkv: "🎬",
+      avi: "🎬",
+      mov: "🎬",
+      webm: "🎬",
+      exe: "⚙️",
+      msi: "⚙️",
+      dmg: "💿",
+      deb: "📦",
+      rpm: "📦",
+      js: "💻",
+      ts: "💻",
+      py: "💻",
+      java: "💻",
+      cpp: "💻",
+      c: "💻",
+      html: "🌐",
+      css: "🎨",
+      json: "📋",
+      xml: "📋",
     };
     return iconMap[ext] || "📁";
   };
@@ -328,12 +371,8 @@ function App() {
             }
             style={{ display: "none" }}
           />
-          <div className={getDropIconClass()}>
-            {getDropIconChar()}
-          </div>
-          <div className="drop-text">
-            {getDropContent()}
-          </div>
+          <div className={getDropIconClass()}>{getDropIconChar()}</div>
+          <div className="drop-text">{getDropContent()}</div>
         </div>
 
         <div className="status-bar">
@@ -371,7 +410,8 @@ function App() {
 
             let buttonClass = "send-button";
             if (success && sendStatus?.delivered) buttonClass += " success";
-            if (success && !sendStatus?.delivered) buttonClass += " transferring";
+            if (success && !sendStatus?.delivered)
+              buttonClass += " transferring";
             if (failed || sendStatus?.rejected) buttonClass += " error";
             if (isSending || waiting) buttonClass += " sending";
             if (!selectedFile) buttonClass += " disabled";
@@ -386,9 +426,14 @@ function App() {
                     {isSending && transferProgress > 0 && (
                       <div className="transfer-progress">
                         <div className="progress-bar">
-                          <div className="progress-fill" style={{ width: `${transferProgress}%` }}></div>
+                          <div
+                            className="progress-fill"
+                            style={{ width: `${transferProgress}%` }}
+                          ></div>
                         </div>
-                        <span className="progress-text">{transferProgress}%</span>
+                        <span className="progress-text">
+                          {transferProgress}%
+                        </span>
                       </div>
                     )}
                   </div>
@@ -396,7 +441,12 @@ function App() {
                 <button
                   className={buttonClass}
                   onClick={() => handleSend(peer.ip)}
-                  disabled={!selectedFile || isSending || waiting || (isDone && !failed && !sendStatus?.rejected)}
+                  disabled={
+                    !selectedFile ||
+                    isSending ||
+                    waiting ||
+                    (isDone && !failed && !sendStatus?.rejected)
+                  }
                 >
                   {isSending ? (
                     <Spinner />
@@ -425,9 +475,15 @@ function App() {
                   {getFileIcon(incomingRequest.filename)}
                 </div>
                 <div className="modal-file-info">
-                  <div className="modal-filename">{incomingRequest.filename}</div>
-                  <div className="modal-filesize">{formatFileSize(incomingRequest.fileSize)}</div>
-                  <div className="modal-sender">From: {incomingRequest.senderName}</div>
+                  <div className="modal-filename">
+                    {incomingRequest.filename}
+                  </div>
+                  <div className="modal-filesize">
+                    {formatFileSize(incomingRequest.fileSize)}
+                  </div>
+                  <div className="modal-sender">
+                    From: {incomingRequest.senderName}
+                  </div>
                 </div>
               </div>
               <div className="modal-actions">
@@ -456,12 +512,7 @@ function App() {
 
 function Spinner() {
   return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      className="spinner"
-    >
+    <svg width="18" height="18" viewBox="0 0 24 24" className="spinner">
       <circle
         cx="12"
         cy="12"
@@ -508,13 +559,7 @@ function AnimatedCheck() {
 function FailedX() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24">
-      <circle
-        cx="12"
-        cy="12"
-        r="10"
-        fill="#f43f5e"
-        className="failed-circle"
-      />
+      <circle cx="12" cy="12" r="10" fill="#f43f5e" className="failed-circle" />
       <path
         d="M8 8l8 8M16 8l-8 8"
         stroke="white"
