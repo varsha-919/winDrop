@@ -27,15 +27,14 @@ app.use(cors());
 app.set('trust proxy', 1); // Enable to get correct client IP behind proxies
 app.use(express.json());
 
-// Return the requesting client's IP (not the server's IP)
+// Return this machine's LAN IP
 app.get("/my-ip", (req, res) => {
-  // Get the client's IP from the request
-  const clientIp = req.ip || req.connection.remoteAddress || getMyIPs()[0] || "127.0.0.1";
-  // Clean up IPv6 mapping if present
-  const cleanIp = clientIp.replace(/^::ffff:/, '').trim();
-  console.log(`🌐 /my-ip: returning client IP ${cleanIp} (request from ${req.ip})`);
+  const ips = getMyIPs();
+
+  console.log("🌐 Returning LAN IP:", ips[0]);
+
   res.json({
-    ip: cleanIp,
+    ip: ips[0] || "127.0.0.1"
   });
 });
 
@@ -328,7 +327,7 @@ io.on("connection", (socket) => {
       console.log(`      socket ${id}: ip=${sock.ip}, rooms=${Array.from(sock.rooms).join(',')}`);
     }
 
-    // Debug: List all IP rooms
+    // Debug: List all IP rooms (including exact match)
     console.log(`   [3] All IP rooms:`);
     for (const [roomName, sockets] of io.sockets.adapter.rooms) {
       if (roomName.includes('.') || /^192\./.test(roomName)) {
@@ -336,9 +335,28 @@ io.on("connection", (socket) => {
       }
     }
 
+    // Debug: Also check raw rooms map
+    console.log(`   [3b] Raw rooms check:`);
+    const allRooms = io.sockets.adapter.rooms;
+    for (const [roomName, sockets] of allRooms) {
+      if (typeof roomName === 'string' && roomName.length > 6) {
+        console.log(`      "${roomName}" -> ${Array.from(sockets).join(', ')}`);
+      }
+    }
+
     // Check exact room match
     const room = io.sockets.adapter.rooms.get(cleanTargetIp);
     console.log(`   [4] Exact room lookup for "${cleanTargetIp}": ${room ? Array.from(room).join(', ') : 'NOT FOUND'}`);
+
+    // Also try finding by iterating
+    let foundRoom = null;
+    for (const [name, socks] of io.sockets.adapter.rooms) {
+      if (name === cleanTargetIp) {
+        foundRoom = socks;
+        break;
+      }
+    }
+    console.log(`   [4b] Iterated room lookup: ${foundRoom ? Array.from(foundRoom).join(', ') : 'NOT FOUND'}`);
 
     // Store pending request with socket ID for direct response
     pendingRequests.set(requestId, {
@@ -356,8 +374,23 @@ io.on("connection", (socket) => {
 
     console.log(`   [5] Emitting incoming_request to room "${cleanTargetIp}"...`);
 
+    // Check if any sockets are in that room BEFORE emitting
+    const socketsInRoom = io.sockets.adapter.rooms.get(cleanTargetIp);
+    if (!socketsInRoom || socketsInRoom.size === 0) {
+      console.log(`   ⚠️ WARNING: Room "${cleanTargetIp}" is EMPTY!`);
+      console.log(`   ⚠️ Trying to find receiver by iterating all rooms...`);
+      // Try alternate lookup
+      for (const [roomName, sockets] of io.sockets.adapter.rooms) {
+        if (roomName === cleanTargetIp) {
+          console.log(`   ⚠️ Found room "${roomName}" with sockets: ${Array.from(sockets).join(', ')}`);
+        }
+      }
+    } else {
+      console.log(`   ✅ Room has ${socketsInRoom.size} socket(s): ${Array.from(socketsInRoom).join(', ')}`);
+    }
+
     // Broadcast to receiver (cleanTargetIp)
-    io.to(cleanTargetIp).emit("incoming_request", {
+    const emitResult = io.to(cleanTargetIp).emit("incoming_request", {
       requestId,
       senderName: senderName,
       senderIp: socket.ip,
@@ -366,7 +399,8 @@ io.on("connection", (socket) => {
       fileType,
     });
 
-    console.log(`   [6] Emit done. pendingRequests now has ${pendingRequests.size} entries`);
+    console.log(`   [6] Emit result: ${emitResult ? 'success' : 'failed/no-recipients'}`);
+    console.log(`   pendingRequests now has ${pendingRequests.size} entries`);
     console.log("========== END DEBUG ==========");
 
     // Set timeout (30 seconds)
@@ -524,8 +558,9 @@ io.on("connection", (socket) => {
   });
 
   // Handle disconnect
-  socket.on("disconnect", () => {
-    console.log("🔌 Client disconnected");
+  socket.on("disconnect", (reason) => {
+    console.log(`🔌 Client disconnected: ${socket.id} (${reason})`);
+    console.log(`   Was registered with IP: ${socket.ip}`);
     // Clean up any pending requests from this client
     for (const [reqId, request] of pendingRequests.entries()) {
       if (request.senderSocketId === socket.id) {

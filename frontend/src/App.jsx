@@ -201,18 +201,20 @@ function App() {
 
     console.log("========== FRONTEND DEBUG ==========");
     console.log(`[SENDER] Emitting transfer_request`);
-    console.log(`  targetIp: ${targetIp}`);
+    console.log(`  targetIp: "${targetIp}"`);
     console.log(`  filename: ${selectedFile.name}`);
     console.log(`  fileSize: ${selectedFile.size}`);
     console.log(`  socket.id: ${socket.id}`);
     console.log("========== END DEBUG ==========");
 
-    socket.emit("transfer_request", {
+    const requestPayload = {
       targetIp,
       filename: selectedFile.name,
       fileSize: selectedFile.size,
       fileType: selectedFile.type,
-    });
+    };
+    console.log("Actual payload:", JSON.stringify(requestPayload));
+    socket.emit("transfer_request", requestPayload);
   };
 
   // 🔥 HANDLE ACCEPT
