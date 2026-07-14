@@ -26,22 +26,28 @@ function App() {
 
   // 🔥 REGISTER THIS CLIENT'S IP
   useEffect(() => {
-    const registerClient = async () => {
-      try {
-        const res = await axios.get(
-          `http://${window.location.hostname}:5001/my-ip`,
-        );
+  socket.on("connect", async () => {
+    console.log("✅ Socket connected");
 
-        socket.emit("register", {
-          ip: res.data.ip,
-        });
+    try {
+      const res = await axios.get(
+        `http://${window.location.hostname}:5001/my-ip`
+      );
 
-        console.log("Registered with:", res.data.ip);
-      } catch (err) {
-        console.error("Registration failed:", err);
-      }
-    };
+      socket.emit("register", {
+        ip: res.data.ip,
+      });
 
+      console.log("📱 Registered with:", res.data.ip);
+    } catch (err) {
+      console.error("Registration failed:", err);
+    }
+  });
+
+  return () => {
+    socket.off("connect");
+  };
+}, []);
     registerClient();
 
     socket.on("peers_list", (peerList) => {
