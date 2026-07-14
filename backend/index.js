@@ -379,40 +379,59 @@ io.on("connection", (socket) => {
     if (!socketsInRoom || socketsInRoom.size === 0) {
       console.log(`   ⚠️ WARNING: Room "${cleanTargetIp}" is EMPTY!`);
 
-      // 🔥 FALLBACK: Search ALL sockets for the target IP
-      console.log(`   🔄 Trying fallback: search all sockets for IP ${cleanTargetIp}...`);
+      // 🔥 Check if receiver is connected at all
+      let receiverSocket = null;
       for (const [sockId, sock] of io.sockets.sockets) {
         if (sock.ip === cleanTargetIp) {
-          console.log(`   ✅ Found receiver by socket.ip! socket.id=${sockId}`);
-          io.to(sockId).emit("incoming_request", {
-            requestId,
-            senderName: senderName,
-            senderIp: socket.ip,
-            filename,
-            fileSize,
-            fileType,
-          });
-          console.log(`   [6] Fallback emit done.`);
-          console.log("========== END DEBUG ==========");
-
-          // Set timeout (30 seconds)
-          const timeout = setTimeout(() => {
-            if (pendingRequests.has(requestId)) {
-              pendingRequests.delete(requestId);
-              socket.emit("request_rejected", {
-                requestId,
-                reason: "Request timed out",
-              });
-            }
-          }, 30000);
-          requestTimeouts.set(requestId, timeout);
-
-          // Send request ID back to sender so they can track it
-          socket.emit("request_queued", { requestId });
-          return; // Exit early, don't do normal emit
+          receiverSocket = sockId;
+          break;
         }
       }
-      console.log(`   ❌ Fallback also failed: no socket with ip=${cleanTargetIp}`);
+
+      if (!receiverSocket) {
+        console.log(`   ❌ RECEIVER OFFLINE: No socket with IP ${cleanTargetIp}`);
+        console.log(`   📡 Connected sockets:`);
+        for (const [sockId, sock] of io.sockets.sockets) {
+          console.log(`      ${sockId}: ip=${sock.ip}`);
+        }
+        console.log("========== END DEBUG ==========");
+
+        // Notify sender that receiver is offline
+        socket.emit("request_rejected", {
+          requestId,
+          reason: "Receiver is offline or disconnected",
+        });
+        pendingRequests.delete(requestId);
+        return;
+      }
+
+      console.log(`   ✅ Found receiver by socket.ip! socket.id=${receiverSocket}`);
+      io.to(receiverSocket).emit("incoming_request", {
+        requestId,
+        senderName: senderName,
+        senderIp: socket.ip,
+        filename,
+        fileSize,
+        fileType,
+      });
+      console.log(`   [6] Fallback emit done.`);
+      console.log("========== END DEBUG ==========");
+
+      // Set timeout (30 seconds)
+      const timeout = setTimeout(() => {
+        if (pendingRequests.has(requestId)) {
+          pendingRequests.delete(requestId);
+          socket.emit("request_rejected", {
+            requestId,
+            reason: "Request timed out",
+          });
+        }
+      }, 30000);
+      requestTimeouts.set(requestId, timeout);
+
+      // Send request ID back to sender so they can track it
+      socket.emit("request_queued", { requestId });
+      return; // Exit early, don't do normal emit
     } else {
       console.log(`   ✅ Room has ${socketsInRoom.size} socket(s): ${Array.from(socketsInRoom).join(', ')}`);
     }
