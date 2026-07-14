@@ -51,7 +51,12 @@ function App() {
 
     // 🔥 HANDLE INCOMING REQUEST
     socket.on("incoming_request", (data) => {
-      console.log("📥 Incoming request:", data);
+      console.log("========== RECEIVER DEBUG ==========");
+      console.log(`[RECEIVER] incoming_request received`);
+      console.log(`  data:`, data);
+      console.log(`  socket.id: ${socket.id}`);
+      console.log(`  Will show popup: YES`);
+      console.log("========== END DEBUG ==========");
       setIncomingRequest(data);
       setReceiveStatus("pending");
     });
@@ -193,6 +198,14 @@ function App() {
 
     // Step 2: Send transfer request via Socket.IO
     setSendStatus({ waiting: true, ip: targetIp });
+
+    console.log("========== FRONTEND DEBUG ==========");
+    console.log(`[SENDER] Emitting transfer_request`);
+    console.log(`  targetIp: ${targetIp}`);
+    console.log(`  filename: ${selectedFile.name}`);
+    console.log(`  fileSize: ${selectedFile.size}`);
+    console.log(`  socket.id: ${socket.id}`);
+    console.log("========== END DEBUG ==========");
 
     socket.emit("transfer_request", {
       targetIp,

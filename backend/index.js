@@ -30,10 +30,10 @@ app.use(express.json());
 // Return the requesting client's IP (not the server's IP)
 app.get("/my-ip", (req, res) => {
   // Get the client's IP from the request
-  const clientIp = req.ip || req.connection.remoteAddress || myIps[0] || "127.0.0.1";
+  const clientIp = req.ip || req.connection.remoteAddress || getMyIPs()[0] || "127.0.0.1";
   // Clean up IPv6 mapping if present
-  const cleanIp = clientIp.replace(/^::ffff:/, '');
-  console.log(`🌐 /my-ip request from ${cleanIp} - returning client IP`);
+  const cleanIp = clientIp.replace(/^::ffff:/, '').trim();
+  console.log(`🌐 /my-ip: returning client IP ${cleanIp} (request from ${req.ip})`);
   res.json({
     ip: cleanIp,
   });
@@ -307,14 +307,38 @@ io.on("connection", (socket) => {
   // 🔥 HANDLE TRANSFER REQUEST (from sender)
   socket.on("transfer_request", (data) => {
     const { targetIp, filename, fileSize, fileType } = data;
+    // Ensure clean IP (trim whitespace)
+    const cleanTargetIp = targetIp ? targetIp.trim() : targetIp;
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     // Get sender info
     const senderName = socket.ip || "Unknown";
 
-    console.log(
-      `📨 Transfer request: ${filename} (${fileSize} bytes) from ${targetIp}`,
-    );
+    console.log("========== TRANSFER REQUEST DEBUG ==========");
+    console.log(`📨 [1] transfer_request received`);
+    console.log(`   targetIp: "${cleanTargetIp}" (type: ${typeof cleanTargetIp})`);
+    console.log(`   filename: ${filename}`);
+    console.log(`   sender socket.id: ${socket.id}`);
+    console.log(`   sender socket.ip: ${socket.ip}`);
+    console.log(`   sender handshake address: ${socket.handshake.address}`);
+
+    // Debug: List ALL sockets and their rooms
+    console.log(`   [2] ALL sockets:`);
+    for (const [id, sock] of io.sockets.sockets) {
+      console.log(`      socket ${id}: ip=${sock.ip}, rooms=${Array.from(sock.rooms).join(',')}`);
+    }
+
+    // Debug: List all IP rooms
+    console.log(`   [3] All IP rooms:`);
+    for (const [roomName, sockets] of io.sockets.adapter.rooms) {
+      if (roomName.includes('.') || /^192\./.test(roomName)) {
+        console.log(`      Room "${roomName}": ${Array.from(sockets).join(', ')}`);
+      }
+    }
+
+    // Check exact room match
+    const room = io.sockets.adapter.rooms.get(cleanTargetIp);
+    console.log(`   [4] Exact room lookup for "${cleanTargetIp}": ${room ? Array.from(room).join(', ') : 'NOT FOUND'}`);
 
     // Store pending request with socket ID for direct response
     pendingRequests.set(requestId, {
@@ -322,7 +346,7 @@ io.on("connection", (socket) => {
       senderSocketId: socket.id,
       senderIp: socket.ip,
       senderName: senderName,
-      targetIp: targetIp,
+      targetIp: cleanTargetIp,
       filename: filename,
       fileSize: fileSize,
       fileType: fileType,
@@ -330,8 +354,10 @@ io.on("connection", (socket) => {
       createdAt: Date.now(),
     });
 
-    // Broadcast to receiver (targetIp)
-    io.to(targetIp).emit("incoming_request", {
+    console.log(`   [5] Emitting incoming_request to room "${cleanTargetIp}"...`);
+
+    // Broadcast to receiver (cleanTargetIp)
+    io.to(cleanTargetIp).emit("incoming_request", {
       requestId,
       senderName: senderName,
       senderIp: socket.ip,
@@ -339,6 +365,9 @@ io.on("connection", (socket) => {
       fileSize,
       fileType,
     });
+
+    console.log(`   [6] Emit done. pendingRequests now has ${pendingRequests.size} entries`);
+    console.log("========== END DEBUG ==========");
 
     // Set timeout (30 seconds)
     const timeout = setTimeout(() => {
@@ -478,11 +507,20 @@ io.on("connection", (socket) => {
   // Store socket IP for targeting
   socket.on("register", (data) => {
     const { ip } = data;
-    socket.ip = ip;
-    socket.join(ip);
-    console.log(`📱 Client registered with IP: ${ip}`);
-    console.log(`🔗 ${ip} -> ${socket.id}`);
+    // Trim whitespace to ensure clean room names
+    const cleanIp = ip ? ip.trim() : ip;
+    socket.ip = cleanIp;
+    socket.join(cleanIp);
+    console.log(`📱 Client registered with IP: ${cleanIp}`);
+    console.log(`🔗 ${cleanIp} -> ${socket.id}`);
 
+    // Debug: show all rooms after registration
+    console.log(`   [DEBUG] All IP rooms after registration:`);
+    for (const [roomName, sockets] of io.sockets.adapter.rooms) {
+      if (roomName.includes('.') || /^192\./.test(roomName)) {
+        console.log(`      Room "${roomName}": ${Array.from(sockets).join(', ')}`);
+      }
+    }
   });
 
   // Handle disconnect
