@@ -375,16 +375,44 @@ io.on("connection", (socket) => {
     console.log(`   [5] Emitting incoming_request to room "${cleanTargetIp}"...`);
 
     // Check if any sockets are in that room BEFORE emitting
-    const socketsInRoom = io.sockets.adapter.rooms.get(cleanTargetIp);
+    let socketsInRoom = io.sockets.adapter.rooms.get(cleanTargetIp);
     if (!socketsInRoom || socketsInRoom.size === 0) {
       console.log(`   ⚠️ WARNING: Room "${cleanTargetIp}" is EMPTY!`);
-      console.log(`   ⚠️ Trying to find receiver by iterating all rooms...`);
-      // Try alternate lookup
-      for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-        if (roomName === cleanTargetIp) {
-          console.log(`   ⚠️ Found room "${roomName}" with sockets: ${Array.from(sockets).join(', ')}`);
+
+      // 🔥 FALLBACK: Search ALL sockets for the target IP
+      console.log(`   🔄 Trying fallback: search all sockets for IP ${cleanTargetIp}...`);
+      for (const [sockId, sock] of io.sockets.sockets) {
+        if (sock.ip === cleanTargetIp) {
+          console.log(`   ✅ Found receiver by socket.ip! socket.id=${sockId}`);
+          io.to(sockId).emit("incoming_request", {
+            requestId,
+            senderName: senderName,
+            senderIp: socket.ip,
+            filename,
+            fileSize,
+            fileType,
+          });
+          console.log(`   [6] Fallback emit done.`);
+          console.log("========== END DEBUG ==========");
+
+          // Set timeout (30 seconds)
+          const timeout = setTimeout(() => {
+            if (pendingRequests.has(requestId)) {
+              pendingRequests.delete(requestId);
+              socket.emit("request_rejected", {
+                requestId,
+                reason: "Request timed out",
+              });
+            }
+          }, 30000);
+          requestTimeouts.set(requestId, timeout);
+
+          // Send request ID back to sender so they can track it
+          socket.emit("request_queued", { requestId });
+          return; // Exit early, don't do normal emit
         }
       }
+      console.log(`   ❌ Fallback also failed: no socket with ip=${cleanTargetIp}`);
     } else {
       console.log(`   ✅ Room has ${socketsInRoom.size} socket(s): ${Array.from(socketsInRoom).join(', ')}`);
     }
@@ -561,6 +589,12 @@ io.on("connection", (socket) => {
   socket.on("disconnect", (reason) => {
     console.log(`🔌 Client disconnected: ${socket.id} (${reason})`);
     console.log(`   Was registered with IP: ${socket.ip}`);
+    console.log(`   Active IP rooms after disconnect:`);
+    for (const [roomName, sockets] of io.sockets.adapter.rooms) {
+      if (roomName.includes('.') || /^192\./.test(roomName)) {
+        console.log(`      Room "${roomName}": ${Array.from(sockets).join(', ')}`);
+      }
+    }
     // Clean up any pending requests from this client
     for (const [reqId, request] of pendingRequests.entries()) {
       if (request.senderSocketId === socket.id) {
