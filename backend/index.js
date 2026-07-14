@@ -24,12 +24,18 @@ function getMyIPs() {
 }
 const myIps = getMyIPs();
 app.use(cors());
+app.set('trust proxy', 1); // Enable to get correct client IP behind proxies
 app.use(express.json());
 
-// Return this machine's LAN IP
+// Return the requesting client's IP (not the server's IP)
 app.get("/my-ip", (req, res) => {
+  // Get the client's IP from the request
+  const clientIp = req.ip || req.connection.remoteAddress || myIps[0] || "127.0.0.1";
+  // Clean up IPv6 mapping if present
+  const cleanIp = clientIp.replace(/^::ffff:/, '');
+  console.log(`🌐 /my-ip request from ${cleanIp} - returning client IP`);
   res.json({
-    ip: myIps[0] || "127.0.0.1",
+    ip: cleanIp,
   });
 });
 
@@ -328,7 +334,7 @@ io.on("connection", (socket) => {
     io.to(targetIp).emit("incoming_request", {
       requestId,
       senderName: senderName,
-      senderIp: socket.handshake.address,
+      senderIp: socket.ip,
       filename,
       fileSize,
       fileType,
@@ -475,6 +481,8 @@ io.on("connection", (socket) => {
     socket.ip = ip;
     socket.join(ip);
     console.log(`📱 Client registered with IP: ${ip}`);
+    console.log(`🔗 ${ip} -> ${socket.id}`);
+
   });
 
   // Handle disconnect
