@@ -13,18 +13,107 @@ function App() {
   const [sendStatus, setSendStatus] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragCounter, setDragCounter] = useState(0);
+
+  // 🔥 INCOMING REQUEST STATE
+  const [incomingRequest, setIncomingRequest] = useState(null);
+  const [isReceiving, setIsReceiving] = useState(false);
+  const [receiveStatus, setReceiveStatus] = useState(null);
+
+  // 🔥 TRANSFER PROGRESS STATE
+  const [transferProgress, setTransferProgress] = useState(0);
+
   const fileInputRef = useRef(null);
 
+  // 🔥 REGISTER THIS CLIENT'S IP
   useEffect(() => {
+    const myIp = window.location.hostname;
+    socket.emit("register", { ip: myIp });
+
     socket.on("peers_list", (peerList) => {
       setPeers(peerList);
       setIsSearching(false);
     });
 
+    // 🔥 HANDLE INCOMING REQUEST
+    socket.on("incoming_request", (data) => {
+      console.log("📥 Incoming request:", data);
+      setIncomingRequest(data);
+      setReceiveStatus("pending");
+    });
+
+    // 🔥 HANDLE REQUEST ACCEPTED
+    socket.on("request_accepted", (data) => {
+      console.log("✅ Request accepted:", data);
+      const { requestId, targetIp } = data;
+
+      // Start the actual transfer via HTTP
+      handleStartTransfer(requestId, targetIp);
+    });
+
+    // 🔥 HANDLE REQUEST REJECTED
+    socket.on("request_rejected", (data) => {
+      console.log("❌ Request rejected:", data);
+      setSendStatus({ success: false, rejected: true, reason: data.reason });
+      setSendingTo(null);
+    });
+
+    // 🔥 HANDLE TRANSFER COMPLETE (on receiver side)
+    socket.on("transfer_complete", (data) => {
+      console.log("📥 Transfer complete:", data);
+      setReceiveStatus("complete");
+      setIsReceiving(false);
+
+      // Send delivery confirmation back to sender
+      socket.emit("transfer_delivered", {
+        requestId: data.requestId,
+      });
+    });
+
+    // 🔥 HANDLE TRANSFER DELIVERED
+    socket.on("transfer_delivered", (data) => {
+      console.log("🎉 Transfer delivered:", data);
+      setSendStatus({ success: true, delivered: true });
+      setSendingTo(null);
+      setTransferProgress(0);
+    });
+
+    // 🔥 HANDLE TRANSFER PROGRESS
+    socket.on("transfer_progress", (data) => {
+      setTransferProgress(data.progress);
+    });
+
+    // 🔥 HANDLE REQUEST CANCELLED
+    socket.on("request_cancelled", (data) => {
+      console.log("🚫 Request cancelled:", data);
+      setIncomingRequest(null);
+      setReceiveStatus(null);
+    });
+
     return () => {
       socket.off("peers_list");
+      socket.off("incoming_request");
+      socket.off("request_accepted");
+      socket.off("request_rejected");
+      socket.off("transfer_delivered");
+      socket.off("transfer_progress");
+      socket.off("request_cancelled");
     };
-  }, []);
+  }, [sendingTo]);
+
+  // 🔥 START TRANSFER (called after accept)
+  const handleStartTransfer = async (requestId, targetIp) => {
+    try {
+      await axios.post(
+        `http://${window.location.hostname}:5001/start-transfer`,
+        { requestId, targetIp }
+      );
+      // Status will be updated via socket events
+    } catch (err) {
+      console.error("Failed to start transfer:", err);
+      setSendStatus({ success: false, ip: sendingTo });
+      setSendingTo(null);
+    }
+  };
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
@@ -66,22 +155,69 @@ function App() {
     if (!selectedFile) return;
     setSendingTo(targetIp);
     setSendStatus(null);
+    setTransferProgress(0);
 
+    // Step 1: Upload file first (with requestMode=true)
     const formData = new FormData();
     formData.append("file", selectedFile);
     formData.append("targetIp", targetIp);
+    formData.append("requestMode", "true");
 
     try {
       await axios.post(
         `http://${window.location.hostname}:5001/send`,
         formData,
       );
-      setSendStatus({ success: true, ip: targetIp });
+      // File uploaded, now send request
     } catch (err) {
-      console.error(err);
+      console.error("File upload failed:", err);
       setSendStatus({ success: false, ip: targetIp });
+      setSendingTo(null);
+      return;
     }
-    setSendingTo(null);
+
+    // Step 2: Send transfer request via Socket.IO
+    setSendStatus({ waiting: true, ip: targetIp });
+
+    socket.emit("transfer_request", {
+      targetIp,
+      filename: selectedFile.name,
+      fileSize: selectedFile.size,
+      fileType: selectedFile.type,
+    });
+  };
+
+  // 🔥 HANDLE ACCEPT
+  const handleAccept = async () => {
+    if (!incomingRequest) return;
+
+    const { requestId, senderIp } = incomingRequest;
+
+    // Notify backend
+    socket.emit("transfer_accept", {
+      requestId,
+      senderIp,
+    });
+
+    setReceiveStatus("accepted");
+    setIncomingRequest(null);
+    setIsReceiving(true);
+  };
+
+  // 🔥 HANDLE REJECT
+  const handleReject = () => {
+    if (!incomingRequest) return;
+
+    const { requestId, senderIp } = incomingRequest;
+
+    socket.emit("transfer_reject", {
+      requestId,
+      senderIp,
+      reason: "Rejected by user",
+    });
+
+    setIncomingRequest(null);
+    setReceiveStatus(null);
   };
 
   const openFileDialog = () => {
@@ -118,6 +254,51 @@ function App() {
     if (isDragging) return "↓";
     if (selectedFile) return "✓";
     return "+";
+  };
+
+  // 🔥 FORMAT FILE SIZE
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + " MB";
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
+  };
+
+  // 🔥 GET FILE ICON
+  const getFileIcon = (filename) => {
+    const ext = filename.split(".").pop()?.toLowerCase();
+    const iconMap = {
+      pdf: "📄",
+      doc: "📝", docx: "📝",
+      xls: "📊", xlsx: "📊",
+      ppt: "📽️", pptx: "📽️",
+      txt: "📃",
+      zip: "📦", rar: "📦", "7z": "📦",
+      jpg: "🖼️", jpeg: "🖼️", png: "🖼️", gif: "🖼️", webp: "🖼️", svg: "🖼️",
+      mp3: "🎵", wav: "🎵", flac: "🎵", aac: "🎵",
+      mp4: "🎬", mkv: "🎬", avi: "🎬", mov: "🎬", webm: "🎬",
+      exe: "⚙️", msi: "⚙️", dmg: "💿", deb: "📦", rpm: "📦",
+      js: "💻", ts: "💻", py: "💻", java: "💻", cpp: "💻", c: "💻",
+      html: "🌐", css: "🎨", json: "📋", xml: "📋",
+    };
+    return iconMap[ext] || "📁";
+  };
+
+  // 🔥 GET BUTTON TEXT BASED ON STATUS
+  const getButtonText = (peer) => {
+    const isSending = sendingTo === peer.ip;
+    const isDone = sendStatus?.ip === peer.ip;
+    const success = isDone && sendStatus?.success;
+    const failed = isDone && !sendStatus?.success;
+    const waiting = isDone && sendStatus?.waiting;
+
+    if (success && sendStatus?.delivered) return "✓ Delivered";
+    if (success) return "✓ Sent";
+    if (failed) return "✗ Failed";
+    if (sendStatus?.rejected) return "✗ Rejected";
+    if (waiting) return "⏳ Waiting...";
+    if (isSending) return "⏳ Sending...";
+    return "Send";
   };
 
   return (
@@ -181,15 +362,18 @@ function App() {
             const isDone = sendStatus?.ip === peer.ip;
             const success = isDone && sendStatus?.success;
             const failed = isDone && !sendStatus?.success;
+            const waiting = isDone && sendStatus?.waiting;
 
             let cardClass = "device-card";
-            if (success) cardClass += " success";
-            if (failed) cardClass += " error";
+            if (success && sendStatus?.delivered) cardClass += " success";
+            if (success && !sendStatus?.delivered) cardClass += " transferring";
+            if (failed || sendStatus?.rejected) cardClass += " error";
 
             let buttonClass = "send-button";
-            if (success) buttonClass += " success";
-            if (failed) buttonClass += " error";
-            if (isSending) buttonClass += " sending";
+            if (success && sendStatus?.delivered) buttonClass += " success";
+            if (success && !sendStatus?.delivered) buttonClass += " transferring";
+            if (failed || sendStatus?.rejected) buttonClass += " error";
+            if (isSending || waiting) buttonClass += " sending";
             if (!selectedFile) buttonClass += " disabled";
 
             return (
@@ -199,27 +383,72 @@ function App() {
                   <div className="device-info">
                     <div className="device-name">{peer.name}</div>
                     <div className="device-ip">{peer.ip}</div>
+                    {isSending && transferProgress > 0 && (
+                      <div className="transfer-progress">
+                        <div className="progress-bar">
+                          <div className="progress-fill" style={{ width: `${transferProgress}%` }}></div>
+                        </div>
+                        <span className="progress-text">{transferProgress}%</span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <button
                   className={buttonClass}
                   onClick={() => handleSend(peer.ip)}
-                  disabled={!selectedFile || isSending}
+                  disabled={!selectedFile || isSending || waiting || (isDone && !failed && !sendStatus?.rejected)}
                 >
                   {isSending ? (
                     <Spinner />
                   ) : success ? (
                     <AnimatedCheck />
-                  ) : failed ? (
+                  ) : failed || sendStatus?.rejected ? (
                     <FailedX />
                   ) : (
-                    "Send"
+                    getButtonText(peer)
                   )}
                 </button>
               </div>
             );
           })}
         </div>
+
+        {/* 🔥 INCOMING REQUEST MODAL */}
+        {incomingRequest && (
+          <div className="modal-overlay">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h2>Incoming File</h2>
+              </div>
+              <div className="modal-body">
+                <div className="modal-file-icon">
+                  {getFileIcon(incomingRequest.filename)}
+                </div>
+                <div className="modal-file-info">
+                  <div className="modal-filename">{incomingRequest.filename}</div>
+                  <div className="modal-filesize">{formatFileSize(incomingRequest.fileSize)}</div>
+                  <div className="modal-sender">From: {incomingRequest.senderName}</div>
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button className="modal-reject-btn" onClick={handleReject}>
+                  Reject
+                </button>
+                <button className="modal-accept-btn" onClick={handleAccept}>
+                  Accept
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 🔥 RECEIVE STATUS */}
+        {isReceiving && receiveStatus && (
+          <div className="receive-status">
+            {receiveStatus === "accepted" && "Accepted - Receiving file..."}
+            {receiveStatus === "complete" && "File received successfully!"}
+          </div>
+        )}
       </div>
     </div>
   );
