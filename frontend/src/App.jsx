@@ -3,7 +3,65 @@ import io from "socket.io-client";
 import axios from "axios";
 import "./App.css";
 
-const socket = io(`http://${window.location.hostname}:5001`);
+// 🔥 GLOBAL SOCKET WITH DETAILED DEBUG LOGGING
+const socket = io(`http://${window.location.hostname}:5001`, {
+  reconnection: true,
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  timeout: 20000,
+});
+
+// 🔥 DETAILED SOCKET LIFECYCLE DEBUGGING
+socket.on("connect", () => {
+  console.log("========== SOCKET CONNECT ==========");
+  console.log(`✅ Connected! socket.id: ${socket.id}`);
+  console.log(`   Connected: ${socket.connected}`);
+  console.log(`   URL: ${socket.io.uri}`);
+  console.log("=====================================");
+});
+
+socket.on("disconnect", (reason) => {
+  console.log("========== SOCKET DISCONNECT ==========");
+  console.log(`❌ Disconnected! Reason: "${reason}"`);
+  console.log(`   socket.id: ${socket.id}`);
+  console.log(`   Connected: ${socket.connected}`);
+  console.log(`   Engine state: ${socket.engine?.transport?.name || 'unknown'}`);
+  console.log("==========================================");
+});
+
+socket.on("connect_error", (err) => {
+  console.log("========== SOCKET CONNECT ERROR ==========");
+  console.log(`⚠️ Connection error: ${err.message}`);
+  console.log(`   Description: ${err.description}`);
+  console.log(`   Context: ${err.context}`);
+  console.log("==========================================`);
+});
+
+socket.on("reconnect_attempt", (attemptNumber) => {
+  console.log("========== SOCKET RECONNECT ATTEMPT ==========");
+  console.log(`🔄 Reconnection attempt #${attemptNumber}`);
+  console.log("==============================================");
+});
+
+socket.on("reconnect", (attemptNumber) => {
+  console.log("========== SOCKET RECONNECTED ==========");
+  console.log(`✅ Reconnected after ${attemptNumber} attempts`);
+  console.log(`   socket.id: ${socket.id}`);
+  console.log("==========================================");
+});
+
+socket.on("reconnect_error", (err) => {
+  console.log("========== SOCKET RECONNECT ERROR ==========");
+  console.log(`⚠️ Reconnect error: ${err.message}`);
+  console.log("============================================");
+});
+
+socket.on("reconnect_failed", () => {
+  console.log("========== SOCKET RECONNECT FAILED ==========");
+  console.log(`❌ All reconnection attempts failed`);
+  console.log("=============================================");
+});
 
 function App() {
   const [peers, setPeers] = useState([]);
@@ -26,6 +84,10 @@ function App() {
 
   // 🔥 REGISTER THIS CLIENT'S IP
   useEffect(() => {
+    console.log("========== USEEFFECT MOUNT ==========");
+    console.log(`   Effect running, socket.connected: ${socket.connected}`);
+    console.log(`   socket.id: ${socket.id}`);
+
     const registerClient = async () => {
       try {
         const res = await axios.get(
@@ -36,7 +98,10 @@ function App() {
           ip: res.data.ip,
         });
 
-        console.log("Registered with:", res.data.ip);
+        console.log("========== REGISTRATION ==========");
+        console.log(`Registered with IP: ${res.data.ip}`);
+        console.log(`socket.id: ${socket.id}`);
+        console.log("===================================");
       } catch (err) {
         console.error("Registration failed:", err);
       }
@@ -110,6 +175,9 @@ function App() {
     });
 
     return () => {
+      console.log("========== USEEFFECT CLEANUP ==========");
+      console.log("   Cleaning up socket listeners (sendingTo changed)");
+      console.log(`   socket.connected: ${socket.connected}`);
       socket.off("peers_list");
       socket.off("incoming_request");
       socket.off("request_accepted");
@@ -117,6 +185,7 @@ function App() {
       socket.off("transfer_delivered");
       socket.off("transfer_progress");
       socket.off("request_cancelled");
+      console.log("========================================");
     };
   }, [sendingTo]);
 

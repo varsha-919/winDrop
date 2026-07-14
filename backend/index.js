@@ -9,6 +9,16 @@ const fs = require("fs");
 const app = express();
 const os = require("os");
 
+
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:");
+  console.error(err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:");
+  console.error(reason);
+});
 // Helper to get all IP addresses of the CURRENT machine
 function getMyIPs() {
   const ips = [];
@@ -39,7 +49,11 @@ app.get("/my-ip", (req, res) => {
 });
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, {
+  cors: { origin: "*" },
+  pingInterval: 25000,    // Ping every 25 seconds
+  pingTimeout: 60000,     // Wait 60 seconds for pong
+});
 
 // 🔥 STORE UNIQUE PEERS
 const peers = new Map();
@@ -292,7 +306,13 @@ app.post("/start-transfer", (req, res) => {
 
 // --- SOCKET CONNECTION ---
 io.on("connection", (socket) => {
-  console.log("🔌 Client connected");
+  console.log("========== BACKEND: CLIENT CONNECTED ==========");
+  console.log(`🔌 New connection`);
+  console.log(`   socket.id: ${socket.id}`);
+  console.log(`   remoteAddress: ${socket.handshake.address}`);
+  console.log(`   User-Agent: ${socket.handshake.headers['user-agent']}`);
+  console.log(`   Current active connections: ${io.engine.clientsCount}`);
+  console.log("=================================================");
 
   // send current list immediately
   // This ensures new clients see existing peers immediately
@@ -650,8 +670,11 @@ io.on("connection", (socket) => {
 
   // Handle disconnect
   socket.on("disconnect", (reason) => {
-    console.log(`🔌 Client disconnected: ${socket.id} (${reason})`);
+    console.log("========== BACKEND: CLIENT DISCONNECTED ==========");
+    console.log(`🔌 Client disconnected: ${socket.id}`);
+    console.log(`   Reason: "${reason}"`);
     console.log(`   Was registered with IP: ${socket.ip}`);
+    console.log(`   Remaining connections: ${io.engine.clientsCount}`);
     console.log(`   Active IP rooms after disconnect:`);
     for (const [roomName, sockets] of io.sockets.adapter.rooms) {
       if (roomName.includes('.') || /^192\./.test(roomName)) {
