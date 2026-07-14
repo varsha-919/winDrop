@@ -300,7 +300,121 @@ void runTcpServer()
                 TransferProtocol::parseMessage(message, msgType, payload);
 
                 // Handle each message type
-                if (msgType == transfer::MSG_HEADER)
+                if (msgType == transfer::MSG_REQUEST)
+                {
+                    cout << "[RECEIVER] REQUEST received" << endl;
+
+                    // Parse REQUEST message
+                    string requestId, filename, fileSizeStr, fileType, senderName, senderIP;
+                    int64_t fileSize;
+
+                    if (TransferProtocol::parseRequest(payload, requestId, filename, fileSize, fileType, senderName, senderIP))
+                    {
+                        cout << "📨 Incoming transfer request: " << filename
+                             << " (" << fileSize << " bytes) from " << senderName
+                             << " (" << senderIP << ")" << endl;
+
+                        // Generate JSON for Express to parse
+                        // Format: WINDROP_REQUEST:JSON
+                        cout << "WINDROP_REQUEST:"
+                            << "{\"type\":\"incoming_request\","
+                            << "\"data\":{"
+                            << "\"requestId\":\"" << requestId << "\","
+                            << "\"filename\":\"" << filename << "\","
+                            << "\"fileSize\":" << fileSize << ","
+                            << "\"fileType\":\"" << fileType << "\","
+                            << "\"senderName\":\"" << senderName << "\","
+                            << "\"senderIP\":\"" << senderIP << "\""
+                            << "}}"
+                            << endl;
+
+                        // Wait for ACCEPT or REJECT from Express via stdin
+                        cout << "[RECEIVER] Waiting for user response..." << endl;
+
+                        // Use non-blocking stdin read with timeout
+                        string userResponse;
+                        bool gotResponse = false;
+                        int timeoutSeconds = 30;
+                        auto startTime = chrono::steady_clock::now();
+
+                        while (!gotResponse)
+                        {
+                            // Check for data on stdin (from Express)
+                            // Use a simple polling mechanism
+                            fd_set stdin_fds;
+                            FD_ZERO(&stdin_fds);
+                            FD_SET(STDIN_FILENO, &stdin_fds);
+
+                            struct timeval tv;
+                            tv.tv_sec = 1;
+                            tv.tv_usec = 0;
+
+                            int ready = select(STDIN_FILENO + 1, &stdin_fds, NULL, NULL, &tv);
+                            if (ready > 0)
+                            {
+                                char respBuf[256];
+                                int bytesRead = read(STDIN_FILENO, respBuf, sizeof(respBuf) - 1);
+                                if (bytesRead > 0)
+                                {
+                                    respBuf[bytesRead] = '\0';
+                                    userResponse += string(respBuf, bytesRead);
+
+                                    // Check for complete response
+                                    size_t newlinePos = userResponse.find('\n');
+                                    if (newlinePos != string::npos)
+                                    {
+                                        userResponse = userResponse.substr(0, newlinePos);
+                                        gotResponse = true;
+                                    }
+                                }
+                            }
+
+                            // Check timeout
+                            auto elapsed = chrono::steady_clock::now() - startTime;
+                            if (chrono::duration_cast<chrono::seconds>(elapsed).count() > timeoutSeconds)
+                            {
+                                cout << "[RECEIVER] Request timeout" << endl;
+                                break;
+                            }
+                        }
+
+                        // Send response to sender
+                        if (userResponse == "ACCEPT")
+                        {
+                            cout << "[RECEIVER] User ACCEPTED the request" << endl;
+                            string acceptMsg = TransferProtocol::buildRequestAccept(requestId);
+                            send(newSocket, acceptMsg.c_str(), acceptMsg.length(), 0);
+
+                            // Store request data in metadata for later use
+                            meta.requestId = requestId;
+                            meta.senderIP = senderIP;
+
+                            // Continue to receive HEADER and chunks (new transfer)
+                            // Reset state for new transfer
+                            outfile.open(windrop::FileUtils::getTempPath(filename), ios::binary);
+                            nextExpectedChunk = 0;
+                            transferComplete = false;
+                            continue;
+                        }
+                        else if (userResponse == "REJECT")
+                        {
+                            cout << "[RECEIVER] User REJECTED the request" << endl;
+                            string rejectMsg = TransferProtocol::buildRequestReject(requestId, "Rejected by user");
+                            send(newSocket, rejectMsg.c_str(), rejectMsg.length(), 0);
+                            windrop::SocketUtils::closeSocket(newSocket);
+                            break;
+                        }
+                        else
+                        {
+                            cout << "[RECEIVER] No response or timeout, rejecting" << endl;
+                            string rejectMsg = TransferProtocol::buildRequestReject(requestId, "Request timed out");
+                            send(newSocket, rejectMsg.c_str(), rejectMsg.length(), 0);
+                            windrop::SocketUtils::closeSocket(newSocket);
+                            break;
+                        }
+                    }
+                }
+                else if (msgType == transfer::MSG_HEADER)
                 {
                     cout << "[RECEIVER] Step 1: HEADER received" << endl;
                     // New transfer request
@@ -515,6 +629,13 @@ void runTcpServer()
                             windrop::FileUtils::cleanupTemp(meta.filename);
                             cout << "✅ Transfer completed and verified (" << actualChecksum << ")" << endl;
                             cout << "📁 File saved as: " << finalPath << endl;
+
+                            // Send DELIVERED_ACK to sender
+                            // Use request ID from metadata if available
+                            string ackRequestId = meta.requestId.empty() ? "unknown" : meta.requestId;
+                            string ackMsg = TransferProtocol::buildDeliveredAck(ackRequestId);
+                            send(newSocket, ackMsg.c_str(), ackMsg.length(), 0);
+                            cout << "📤 DELIVERED_ACK sent to sender" << endl;
                         }
                         else
                         {

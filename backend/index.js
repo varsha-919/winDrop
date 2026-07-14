@@ -9,7 +9,6 @@ const fs = require("fs");
 const app = express();
 const os = require("os");
 
-
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:");
   console.error(err);
@@ -34,7 +33,7 @@ function getMyIPs() {
 }
 const myIps = getMyIPs();
 app.use(cors());
-app.set('trust proxy', 1); // Enable to get correct client IP behind proxies
+app.set("trust proxy", 1); // Enable to get correct client IP behind proxies
 app.use(express.json());
 
 // Return this machine's LAN IP
@@ -44,15 +43,15 @@ app.get("/my-ip", (req, res) => {
   console.log("🌐 Returning LAN IP:", ips[0]);
 
   res.json({
-    ip: ips[0] || "127.0.0.1"
+    ip: ips[0] || "127.0.0.1",
   });
 });
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*" },
-  pingInterval: 25000,    // Ping every 25 seconds
-  pingTimeout: 60000,     // Wait 60 seconds for pong
+  pingInterval: 25000, // Ping every 25 seconds
+  pingTimeout: 60000, // Wait 60 seconds for pong
 });
 
 // 🔥 STORE UNIQUE PEERS
@@ -93,15 +92,58 @@ const SENDER =
 // --- SPAWN CORE ENGINE ---
 const coreEngine = spawn(CORE);
 
+coreEngine.on("error", (err) => {
+  console.error("========== CORE ENGINE ERROR ==========");
+  console.error(`❌ Core engine failed to start: ${err.message}`);
+  console.error("=========================================");
+});
+
+coreEngine.on("exit", (code, signal) => {
+  console.error("========== CORE ENGINE EXIT ==========");
+  console.error(`❌ Core engine exited with code: ${code}, signal: ${signal}`);
+  console.error("=======================================");
+});
+
+coreEngine.stderr.on("data", (data) => {
+  console.error(`❌ [CORE STDERR]: ${data.toString()}`);
+});
+
 coreEngine.stdout.on("data", (data) => {
   // When C++ core prints to stdout, this fires
   // data is a Buffer, needs .toString()
 
-  // C++ core outputs:
-  // "Founded Peer: DESKTOP:192.168.1.10 Alive"
-  const lines = data.toString().trim().split("\n");
+  const output = data.toString();
+  const lines = output.trim().split("\n");
 
   lines.forEach((line) => {
+    // Check for incoming request from core.cpp
+    if (line.startsWith("WINDROP_REQUEST:")) {
+      try {
+        const jsonStr = line.replace("WINDROP_REQUEST:", "");
+        const requestData = JSON.parse(jsonStr);
+
+        console.log("📨 Incoming request from core.cpp:", requestData);
+
+        // Emit to local frontend via Socket.IO
+        io.emit("incoming_request", requestData.data);
+
+        // Store pending request
+        const { requestId, senderIP, filename, fileSize, fileType } = requestData.data;
+        pendingRequests.set(requestId, {
+          id: requestId,
+          senderIp: senderIP,
+          filename,
+          fileSize,
+          fileType,
+          status: "pending",
+          createdAt: Date.now(),
+        });
+      } catch (err) {
+        console.error("Failed to parse request JSON:", err);
+      }
+      return;
+    }
+
     if (line.includes("Discovered peer:")) {
       const parts = line.split("Discovered peer: ");
 
@@ -187,7 +229,7 @@ app.post("/send", upload.single("file"), (req, res) => {
 });
 
 // --- TRANSFER REQUEST ENDPOINT ---
-// Initiates request flow WITHOUT starting sender.cpp immediately
+// Uses TCP-based request flow through sender.cpp
 app.post("/send-request", (req, res) => {
   const { targetIp, filename, fileSize, fileType } = req.body;
 
@@ -195,24 +237,30 @@ app.post("/send-request", (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // Check if target is online
+  // Check if target is online via UDP discovery
   if (!peers.has(targetIp)) {
     return res
       .status(404)
       .json({ error: "Target device not found on network" });
   }
 
-  console.log(`📨 Sending transfer request: ${filename} to ${targetIp}`);
+  console.log(`📨 Sending TCP-based transfer request: ${filename} to ${targetIp}`);
 
   // Create request ID
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  const senderName = "This Device"; // Could get from system
+
+  // Get the uploaded file
+  const uploadedFile = uploadedFiles.get(targetIp);
+  if (!uploadedFile) {
+    return res.status(400).json({ error: "No file uploaded. Upload first." });
+  }
+
+  const { filePath, fileSize: storedSize } = uploadedFile;
 
   // Store pending request
   pendingRequests.set(requestId, {
     id: requestId,
     senderIp: "local",
-    senderName: senderName,
     targetIp: targetIp,
     filename: filename,
     fileSize: fileSize,
@@ -221,26 +269,52 @@ app.post("/send-request", (req, res) => {
     createdAt: Date.now(),
   });
 
-  // Broadcast to receiver (targetIp)
-  io.to(targetIp).emit("incoming_request", {
+  // Spawn sender in REQUEST MODE
+  // Usage: ./sender --request <target_ip> <request_id> <file_path> [file_size]
+  const sender = spawn(SENDER, [
+    "--request",
+    targetIp,
     requestId,
-    senderName: senderName,
-    senderIp: "local",
-    filename,
-    fileSize,
-    fileType,
+    filePath,
+    fileSize.toString(),
+  ]);
+
+  let senderOutput = "";
+
+  sender.stdout.on("data", (data) => {
+    const output = data.toString();
+    senderOutput += output;
+    console.log(`📤 [SENDER]: ${output}`);
   });
 
-  // Set timeout (30 seconds)
-  const timeout = setTimeout(() => {
-    if (pendingRequests.has(requestId)) {
-      pendingRequests.delete(requestId);
-      // Emit rejection via socket is handled separately
-    }
-  }, 30000);
-  requestTimeouts.set(requestId, timeout);
+  sender.stderr.on("data", (data) => {
+    console.error(`❌ [SENDER ERROR]: ${data.toString()}`);
+  });
 
-  res.json({ requestId, status: "pending" });
+  sender.on("close", (code) => {
+    console.log(`🏁 Sender finished (Code: ${code})`);
+
+    // Parse output to check for accept/reject
+    if (senderOutput.includes("accepted")) {
+      // Request was accepted, proceed with actual transfer
+      pendingRequests.get(requestId).status = "accepted";
+      res.json({ requestId, status: "accepted" });
+    } else if (senderOutput.includes("rejected")) {
+      pendingRequests.get(requestId).status = "rejected";
+      res.json({ requestId, status: "rejected", reason: "Rejected by user" });
+    } else if (code !== 0) {
+      pendingRequests.get(requestId).status = "failed";
+      res.json({ requestId, status: "failed", reason: "Transfer failed" });
+    } else {
+      res.json({ requestId, status: "completed" });
+    }
+
+    // Clean up uploaded file record
+    uploadedFiles.delete(targetIp);
+  });
+
+  // Return immediately - sender runs asynchronously
+  res.json({ requestId, status: "waiting" });
 });
 
 // --- HTTP ENDPOINT TO START SENDER.CPP (called after accept) ---
@@ -304,13 +378,44 @@ app.post("/start-transfer", (req, res) => {
   res.json({ success: true, requestId });
 });
 
+// --- RESPOND TO TRANSFER REQUEST (ACCEPT/REJECT) ---
+// This writes to core.cpp's stdin so it can forward to sender
+app.post("/respond-request", (req, res) => {
+  const { requestId, action } = req.body;
+
+  if (!requestId || !action) {
+    return res.status(400).json({ error: "Missing requestId or action" });
+  }
+
+  if (action !== "ACCEPT" && action !== "REJECT") {
+    return res.status(400).json({ error: "Invalid action" });
+  }
+
+  console.log(`📝 Responding to request ${requestId}: ${action}`);
+
+  // Write to core.cpp's stdin
+  if (coreEngine && coreEngine.stdin) {
+    coreEngine.stdin.write(action + "\n");
+
+    // Update request status
+    const request = pendingRequests.get(requestId);
+    if (request) {
+      request.status = action === "ACCEPT" ? "accepted" : "rejected";
+    }
+
+    res.json({ success: true });
+  } else {
+    res.status(500).json({ error: "Core engine not available" });
+  }
+});
+
 // --- SOCKET CONNECTION ---
 io.on("connection", (socket) => {
   console.log("========== BACKEND: CLIENT CONNECTED ==========");
   console.log(`🔌 New connection`);
   console.log(`   socket.id: ${socket.id}`);
   console.log(`   remoteAddress: ${socket.handshake.address}`);
-  console.log(`   User-Agent: ${socket.handshake.headers['user-agent']}`);
+  console.log(`   User-Agent: ${socket.handshake.headers["user-agent"]}`);
   console.log(`   Current active connections: ${io.engine.clientsCount}`);
   console.log("=================================================");
 
@@ -335,7 +440,9 @@ io.on("connection", (socket) => {
 
     console.log("========== TRANSFER REQUEST DEBUG ==========");
     console.log(`📨 [1] transfer_request received`);
-    console.log(`   targetIp: "${cleanTargetIp}" (type: ${typeof cleanTargetIp})`);
+    console.log(
+      `   targetIp: "${cleanTargetIp}" (type: ${typeof cleanTargetIp})`,
+    );
     console.log(`   filename: ${filename}`);
     console.log(`   sender socket.id: ${socket.id}`);
     console.log(`   sender socket.ip: ${socket.ip}`);
@@ -344,14 +451,18 @@ io.on("connection", (socket) => {
     // Debug: List ALL sockets and their rooms
     console.log(`   [2] ALL sockets:`);
     for (const [id, sock] of io.sockets.sockets) {
-      console.log(`      socket ${id}: ip=${sock.ip}, rooms=${Array.from(sock.rooms).join(',')}`);
+      console.log(
+        `      socket ${id}: ip=${sock.ip}, rooms=${Array.from(sock.rooms).join(",")}`,
+      );
     }
 
     // Debug: List all IP rooms (including exact match)
     console.log(`   [3] All IP rooms:`);
     for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-      if (roomName.includes('.') || /^192\./.test(roomName)) {
-        console.log(`      Room "${roomName}": ${Array.from(sockets).join(', ')}`);
+      if (roomName.includes(".") || /^192\./.test(roomName)) {
+        console.log(
+          `      Room "${roomName}": ${Array.from(sockets).join(", ")}`,
+        );
       }
     }
 
@@ -359,14 +470,16 @@ io.on("connection", (socket) => {
     console.log(`   [3b] Raw rooms check:`);
     const allRooms = io.sockets.adapter.rooms;
     for (const [roomName, sockets] of allRooms) {
-      if (typeof roomName === 'string' && roomName.length > 6) {
-        console.log(`      "${roomName}" -> ${Array.from(sockets).join(', ')}`);
+      if (typeof roomName === "string" && roomName.length > 6) {
+        console.log(`      "${roomName}" -> ${Array.from(sockets).join(", ")}`);
       }
     }
 
     // Check exact room match
     const room = io.sockets.adapter.rooms.get(cleanTargetIp);
-    console.log(`   [4] Exact room lookup for "${cleanTargetIp}": ${room ? Array.from(room).join(', ') : 'NOT FOUND'}`);
+    console.log(
+      `   [4] Exact room lookup for "${cleanTargetIp}": ${room ? Array.from(room).join(", ") : "NOT FOUND"}`,
+    );
 
     // Also try finding by iterating
     let foundRoom = null;
@@ -376,7 +489,9 @@ io.on("connection", (socket) => {
         break;
       }
     }
-    console.log(`   [4b] Iterated room lookup: ${foundRoom ? Array.from(foundRoom).join(', ') : 'NOT FOUND'}`);
+    console.log(
+      `   [4b] Iterated room lookup: ${foundRoom ? Array.from(foundRoom).join(", ") : "NOT FOUND"}`,
+    );
 
     // Store pending request with socket ID for direct response
     pendingRequests.set(requestId, {
@@ -392,7 +507,9 @@ io.on("connection", (socket) => {
       createdAt: Date.now(),
     });
 
-    console.log(`   [5] Emitting incoming_request to room "${cleanTargetIp}"...`);
+    console.log(
+      `   [5] Emitting incoming_request to room "${cleanTargetIp}"...`,
+    );
 
     // Check if any sockets are in that room BEFORE emitting
     let socketsInRoom = io.sockets.adapter.rooms.get(cleanTargetIp);
@@ -409,7 +526,9 @@ io.on("connection", (socket) => {
       }
 
       if (!receiverSocket) {
-        console.log(`   ❌ RECEIVER OFFLINE: No socket with IP ${cleanTargetIp}`);
+        console.log(
+          `   ❌ RECEIVER OFFLINE: No socket with IP ${cleanTargetIp}`,
+        );
         console.log(`   📡 Connected sockets:`);
         for (const [sockId, sock] of io.sockets.sockets) {
           console.log(`      ${sockId}: ip=${sock.ip}`);
@@ -418,10 +537,12 @@ io.on("connection", (socket) => {
         // 🔥 Check if any peer with this IP exists in our peer list
         // Even if Socket.IO disconnected, peer might still be reachable
         const peerExists = peers.has(cleanTargetIp);
-        console.log(`   📡 Peer in UDP list: ${peerExists ? 'YES' : 'NO'}`);
+        console.log(`   📡 Peer in UDP list: ${peerExists ? "YES" : "NO"}`);
 
         if (peerExists) {
-          console.log(`   ⚠️ Peer is in peer list but Socket.IO disconnected. Retrying in 2s...`);
+          console.log(
+            `   ⚠️ Peer is in peer list but Socket.IO disconnected. Retrying in 2s...`,
+          );
           // Give receiver time to reconnect
           setTimeout(() => {
             // Try again
@@ -440,7 +561,10 @@ io.on("connection", (socket) => {
                 const timeout = setTimeout(() => {
                   if (pendingRequests.has(requestId)) {
                     pendingRequests.delete(requestId);
-                    socket.emit("request_rejected", { requestId, reason: "Request timed out" });
+                    socket.emit("request_rejected", {
+                      requestId,
+                      reason: "Request timed out",
+                    });
                   }
                 }, 30000);
                 requestTimeouts.set(requestId, timeout);
@@ -449,7 +573,10 @@ io.on("connection", (socket) => {
               }
             }
             // Still not connected after retry
-            socket.emit("request_rejected", { requestId, reason: "Receiver disconnected" });
+            socket.emit("request_rejected", {
+              requestId,
+              reason: "Receiver disconnected",
+            });
             pendingRequests.delete(requestId);
           }, 2000);
 
@@ -469,7 +596,9 @@ io.on("connection", (socket) => {
         return;
       }
 
-      console.log(`   ✅ Found receiver by socket.ip! socket.id=${receiverSocket}`);
+      console.log(
+        `   ✅ Found receiver by socket.ip! socket.id=${receiverSocket}`,
+      );
       io.to(receiverSocket).emit("incoming_request", {
         requestId,
         senderName: senderName,
@@ -497,7 +626,9 @@ io.on("connection", (socket) => {
       socket.emit("request_queued", { requestId });
       return; // Exit early, don't do normal emit
     } else {
-      console.log(`   ✅ Room has ${socketsInRoom.size} socket(s): ${Array.from(socketsInRoom).join(', ')}`);
+      console.log(
+        `   ✅ Room has ${socketsInRoom.size} socket(s): ${Array.from(socketsInRoom).join(", ")}`,
+      );
     }
 
     // Broadcast to receiver (cleanTargetIp)
@@ -510,7 +641,9 @@ io.on("connection", (socket) => {
       fileType,
     });
 
-    console.log(`   [6] Emit result: ${emitResult ? 'success' : 'failed/no-recipients'}`);
+    console.log(
+      `   [6] Emit result: ${emitResult ? "success" : "failed/no-recipients"}`,
+    );
     console.log(`   pendingRequests now has ${pendingRequests.size} entries`);
     console.log("========== END DEBUG ==========");
 
@@ -662,8 +795,10 @@ io.on("connection", (socket) => {
     // Debug: show all rooms after registration
     console.log(`   [DEBUG] All IP rooms after registration:`);
     for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-      if (roomName.includes('.') || /^192\./.test(roomName)) {
-        console.log(`      Room "${roomName}": ${Array.from(sockets).join(', ')}`);
+      if (roomName.includes(".") || /^192\./.test(roomName)) {
+        console.log(
+          `      Room "${roomName}": ${Array.from(sockets).join(", ")}`,
+        );
       }
     }
   });
@@ -677,8 +812,10 @@ io.on("connection", (socket) => {
     console.log(`   Remaining connections: ${io.engine.clientsCount}`);
     console.log(`   Active IP rooms after disconnect:`);
     for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-      if (roomName.includes('.') || /^192\./.test(roomName)) {
-        console.log(`      Room "${roomName}": ${Array.from(sockets).join(', ')}`);
+      if (roomName.includes(".") || /^192\./.test(roomName)) {
+        console.log(
+          `      Room "${roomName}": ${Array.from(sockets).join(", ")}`,
+        );
       }
     }
     // Clean up any pending requests from this client
@@ -698,3 +835,15 @@ io.on("connection", (socket) => {
 server.listen(5001, () =>
   console.log("✅ Lighthouse Backend at http://localhost:5001"),
 );
+
+// 🔥 Monitor server errors
+server.on("error", (err) => {
+  console.error("========== SERVER ERROR ==========");
+  console.error(`Server error: ${err.message}`);
+  console.error("===================================");
+});
+
+// 🔥 Keep-alive to prevent idle disconnects
+setInterval(() => {
+  console.log("💓 Server heartbeat - active connections:", io.engine.clientsCount);
+}, 30000);

@@ -3,14 +3,25 @@ import io from "socket.io-client";
 import axios from "axios";
 import "./App.css";
 
-// 🔥 GLOBAL SOCKET WITH DETAILED DEBUG LOGGING
-const socket = io(`http://${window.location.hostname}:5001`, {
-  reconnection: true,
-  reconnectionAttempts: Infinity,
-  reconnectionDelay: 1000,
-  reconnectionDelayMax: 5000,
-  timeout: 20000,
-});
+// 🔥 GLOBAL SOCKET INSTANCE
+let socketInstance = null;
+
+// Get or create socket - prevents multiple instances
+function getSocket() {
+  if (!socketInstance) {
+    console.log("========== CREATING NEW SOCKET INSTANCE ==========");
+    socketInstance = io(`http://${window.location.hostname}:5001`, {
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    });
+  }
+  return socketInstance;
+}
+
+const socket = getSocket();
 
 // 🔥 DETAILED SOCKET LIFECYCLE DEBUGGING
 socket.on("connect", () => {
@@ -35,7 +46,7 @@ socket.on("connect_error", (err) => {
   console.log(`⚠️ Connection error: ${err.message}`);
   console.log(`   Description: ${err.description}`);
   console.log(`   Context: ${err.context}`);
-  console.log("==========================================`);
+  console.log("==========================================");
 });
 
 socket.on("reconnect_attempt", (attemptNumber) => {
@@ -64,6 +75,16 @@ socket.on("reconnect_failed", () => {
 });
 
 function App() {
+  // Track component mounts to detect StrictMode double-render
+  const mountCount = React.useRef(0);
+  mountCount.current += 1;
+
+  console.log("========== APP MOUNT ==========");
+  console.log(`   Mount #${mountCount.current}`);
+  console.log(`   socket.connected: ${socket.connected}`);
+  console.log(`   socket.id: ${socket.id}`);
+  console.log("===============================");
+
   const [peers, setPeers] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isSearching, setIsSearching] = useState(true);
@@ -87,6 +108,8 @@ function App() {
     console.log("========== USEEFFECT MOUNT ==========");
     console.log(`   Effect running, socket.connected: ${socket.connected}`);
     console.log(`   socket.id: ${socket.id}`);
+    console.log(`   Stack trace:`);
+    console.trace();
 
     const registerClient = async () => {
       try {
@@ -242,6 +265,12 @@ function App() {
 
   const handleSend = async (targetIp) => {
     if (!selectedFile) return;
+
+    console.log("========== HANDLE SEND ==========");
+    console.log(`   targetIp: ${targetIp}`);
+    console.log(`   socket.connected: ${socket.connected}`);
+    console.log(`   socket.id: ${socket.id}`);
+
     setSendingTo(targetIp);
     setSendStatus(null);
     setTransferProgress(0);
@@ -265,55 +294,76 @@ function App() {
       return;
     }
 
-    // Step 2: Send transfer request via Socket.IO
+    // Step 2: Send TCP-based transfer request via HTTP
     setSendStatus({ waiting: true, ip: targetIp });
 
-    console.log("========== FRONTEND DEBUG ==========");
-    console.log(`[SENDER] Emitting transfer_request`);
-    console.log(`  targetIp: "${targetIp}"`);
-    console.log(`  filename: ${selectedFile.name}`);
-    console.log(`  fileSize: ${selectedFile.size}`);
-    console.log(`  socket.id: ${socket.id}`);
-    console.log("========== END DEBUG ==========");
+    try {
+      const response = await axios.post(
+        `http://${window.location.hostname}:5001/send-request`,
+        {
+          targetIp,
+          filename: selectedFile.name,
+          fileSize: selectedFile.size,
+          fileType: selectedFile.type,
+        },
+      );
 
-    const requestPayload = {
-      targetIp,
-      filename: selectedFile.name,
-      fileSize: selectedFile.size,
-      fileType: selectedFile.type,
-    };
-    console.log("Actual payload:", JSON.stringify(requestPayload));
-    socket.emit("transfer_request", requestPayload);
+      const { requestId, status } = response.data;
+
+      if (status === "accepted") {
+        setSendStatus({ success: true, ip: targetIp });
+        setSendingTo(null);
+      } else if (status === "rejected") {
+        setSendStatus({ success: false, rejected: true, reason: response.data.reason, ip: targetIp });
+        setSendingTo(null);
+      } else if (status === "failed") {
+        setSendStatus({ success: false, ip: targetIp });
+        setSendingTo(null);
+      }
+      // If status is "waiting", the transfer will complete asynchronously
+    } catch (err) {
+      console.error("Transfer request failed:", err);
+      setSendStatus({ success: false, ip: targetIp });
+      setSendingTo(null);
+    }
   };
 
   // 🔥 HANDLE ACCEPT
   const handleAccept = async () => {
     if (!incomingRequest) return;
 
-    const { requestId, senderIp } = incomingRequest;
+    const { requestId } = incomingRequest;
 
-    // Notify backend
-    socket.emit("transfer_accept", {
-      requestId,
-      senderIp,
-    });
+    // Send ACCEPT to backend via HTTP (writes to core.cpp stdin)
+    try {
+      await axios.post(
+        `http://${window.location.hostname}:5001/respond-request`,
+        { requestId, action: "ACCEPT" },
+      );
 
-    setReceiveStatus("accepted");
-    setIncomingRequest(null);
-    setIsReceiving(true);
+      setReceiveStatus("accepted");
+      setIncomingRequest(null);
+      setIsReceiving(true);
+    } catch (err) {
+      console.error("Failed to accept:", err);
+    }
   };
 
   // 🔥 HANDLE REJECT
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!incomingRequest) return;
 
-    const { requestId, senderIp } = incomingRequest;
+    const { requestId } = incomingRequest;
 
-    socket.emit("transfer_reject", {
-      requestId,
-      senderIp,
-      reason: "Rejected by user",
-    });
+    // Send REJECT to backend via HTTP (writes to core.cpp stdin)
+    try {
+      await axios.post(
+        `http://${window.location.hostname}:5001/respond-request`,
+        { requestId, action: "REJECT" },
+      );
+    } catch (err) {
+      console.error("Failed to reject:", err);
+    }
 
     setIncomingRequest(null);
     setReceiveStatus(null);

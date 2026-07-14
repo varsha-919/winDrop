@@ -145,8 +145,11 @@ bool sendChunkWithAck(WindropSocket sock, int chunkIndex, const char *data, int 
 
 /**
  * Main file sending function with resume capability
+ * @param requestMode If true, send REQUEST first and wait for ACCEPT/REJECT
+ * @param requestId Unique ID for tracking (required if requestMode is true)
  */
-int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = -1)
+int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = -1,
+            bool requestMode = false, const string &requestId = "")
 {
     // Create socket
     WindropSocket sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -203,6 +206,10 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         return 1;
     }
 
+    // Get sender info
+    string senderName = windrop::NetworkUtils::getHostname();
+    string senderIP = windrop::NetworkUtils::getLocalIP();
+
     // Calculate chunks
     int chunkSize = config::CHUNK_SIZE;
     int totalChunks = static_cast<int>((fileSize + chunkSize - 1) / chunkSize);
@@ -210,6 +217,88 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
     cout << "📤 Sending: " << filename
          << " (" << fileSize << " bytes, "
          << totalChunks << " chunks)" << endl;
+
+    // ============================================================
+    // REQUEST MODE: Send REQUEST message and wait for ACCEPT/REJECT
+    // ============================================================
+    if (requestMode)
+    {
+        cout << "📨 Sending transfer request..." << endl;
+
+        // Detect file type from extension
+        string fileType = "application/octet-stream";
+        size_t dotPos = filename.find_last_of('.');
+        if (dotPos != string::npos)
+        {
+            string ext = filename.substr(dotPos + 1);
+            // Simple mime type detection
+            if (ext == "pdf") fileType = "application/pdf";
+            else if (ext == "jpg" || ext == "jpeg") fileType = "image/jpeg";
+            else if (ext == "png") fileType = "image/png";
+            else if (ext == "gif") fileType = "image/gif";
+            else if (ext == "mp4") fileType = "video/mp4";
+            else if (ext == "mp3") fileType = "audio/mpeg";
+            else if (ext == "txt") fileType = "text/plain";
+            else if (ext == "zip") fileType = "application/zip";
+            else if (ext == "doc" || ext == "docx") fileType = "application/msword";
+            else if (ext == "xls" || ext == "xlsx") fileType = "application/vnd.ms-excel";
+        }
+
+        // Build and send REQUEST message
+        string requestMsg = TransferProtocol::buildRequest(requestId, filename, fileSize, fileType, senderName, senderIP);
+        int sent = send(sock, requestMsg.c_str(), requestMsg.length(), 0);
+        if (sent < 0)
+        {
+            cerr << "❌ Failed to send request message" << endl;
+            windrop::SocketUtils::closeSocket(sock);
+            return 1;
+        }
+
+        cout << "📨 REQUEST sent, waiting for response..." << endl;
+
+        // Wait for ACCEPT or REJECT (with timeout)
+        char responseBuffer[512];
+        setSocketTimeout(sock, 30000); // 30 second timeout
+
+        int bytesRead = recv(sock, responseBuffer, sizeof(responseBuffer) - 1, 0);
+        if (bytesRead <= 0)
+        {
+            cerr << "❌ Request timed out or connection lost" << endl;
+            windrop::SocketUtils::closeSocket(sock);
+            return 1;
+        }
+
+        responseBuffer[bytesRead] = '\0';
+        string response(responseBuffer, bytesRead);
+
+        // Remove trailing newline
+        if (!response.empty() && response.back() == '\n')
+            response.pop_back();
+
+        // Parse response
+        string msgType, payload;
+        TransferProtocol::parseMessage(response, msgType, payload);
+
+        if (msgType == transfer::MSG_REQUEST_ACCEPT)
+        {
+            cout << "✅ Transfer request accepted!" << endl;
+        }
+        else if (msgType == transfer::MSG_REQUEST_REJECT)
+        {
+            string rejectRequestId;
+            string reason;
+            TransferProtocol::parseRequestReject(payload, rejectRequestId, reason);
+            cerr << "❌ Transfer request rejected: " << reason << endl;
+            windrop::SocketUtils::closeSocket(sock);
+            return 1;
+        }
+        else
+        {
+            cerr << "❌ Invalid response from receiver: " << msgType << endl;
+            windrop::SocketUtils::closeSocket(sock);
+            return 1;
+        }
+    }
 
     // Send RESUME_QUERY to check for existing transfer
     cout << "🔍 Checking for existing transfer..." << endl;
@@ -366,6 +455,41 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         return 1;
     }
 
+    // Wait for DELIVERED_ACK to confirm file was saved
+    cout << "⏳ Waiting for delivery confirmation..." << endl;
+
+    char ackBuffer[256];
+    setSocketTimeout(sock, 30000); // 30 second timeout for delivery ack
+
+    int bytesRead = recv(sock, ackBuffer, sizeof(ackBuffer) - 1, 0);
+    if (bytesRead > 0)
+    {
+        ackBuffer[bytesRead] = '\0';
+        string ackResponse(ackBuffer, bytesRead);
+
+        // Remove trailing newline
+        if (!ackResponse.empty() && ackResponse.back() == '\n')
+            ackResponse.pop_back();
+
+        string msgType, payload;
+        TransferProtocol::parseMessage(ackResponse, msgType, payload);
+
+        if (msgType == transfer::MSG_DELIVERED_ACK)
+        {
+            string ackRequestId;
+            TransferProtocol::parseDeliveredAck(payload, ackRequestId);
+            cout << "🎉 Delivery confirmed! Request ID: " << ackRequestId << endl;
+        }
+        else
+        {
+            cout << "⚠️ Unexpected response after COMPLETE: " << msgType << endl;
+        }
+    }
+    else
+    {
+        cout << "⚠️ No delivery confirmation received (timeout)" << endl;
+    }
+
     cout << "✅ SUCCESS: " << filename << " sent! (" << sentChunks << " chunks, checksum: " << checksum << ")" << endl;
 
     windrop::SocketUtils::closeSocket(sock);
@@ -375,6 +499,11 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
 /**
  * Main entry point
  * Usage: ./sender <target_ip> <file_path> [file_size]
+ *        ./sender --request <target_ip> <file_id> <file_path> [file_size]
+ *
+ * Flags:
+ *   --request    : Send REQUEST first, wait for ACCEPT/REJECT before transfer
+ *   <request_id> : Unique ID for tracking the request (required with --request)
  */
 int main(int argc, char *argv[])
 {
@@ -385,36 +514,69 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Validate arguments
-    if (argc < 3)
+    // Check for --request flag
+    bool requestMode = false;
+    string requestId;
+    int argOffset = 0;
+
+    if (argc >= 2 && string(argv[1]) == "--request")
     {
-        cerr << "Usage: ./sender <target_ip> <file_path> [file_size]" << endl;
-        cerr << "  file_size is optional but recommended for resume support" << endl;
+        requestMode = true;
+        argOffset = 2;
+
+        if (argc < 4)
+        {
+            cerr << "Usage: ./sender --request <target_ip> <request_id> <file_path> [file_size]" << endl;
+            windrop::Platform::cleanup();
+            return 1;
+        }
+    }
+
+    // Validate arguments
+    int minArgs = requestMode ? 4 : 3;
+    if (argc < minArgs + argOffset)
+    {
+        if (requestMode)
+        {
+            cerr << "Usage: ./sender --request <target_ip> <request_id> <file_path> [file_size]" << endl;
+        }
+        else
+        {
+            cerr << "Usage: ./sender <target_ip> <file_path> [file_size]" << endl;
+            cerr << "  file_size is optional but recommended for resume support" << endl;
+        }
         windrop::Platform::cleanup();
         return 1;
     }
 
-    string targetIp = argv[1];
-    string filePath = argv[2];
+    string targetIp = argv[1 + argOffset];
+    string filePath = argv[2 + argOffset];
     int64_t fileSize = -1;
 
+    if (requestMode)
+    {
+        requestId = argv[2 + argOffset];
+        filePath = argv[3 + argOffset];
+    }
+
     // Parse optional file size
-    if (argc >= 4)
+    int fileSizeArgIndex = requestMode ? 4 + argOffset : 3;
+    if (argc >= fileSizeArgIndex)
     {
         try
         {
-            fileSize = stoll(argv[3]);
+            fileSize = stoll(argv[fileSizeArgIndex]);
         }
         catch (...)
         {
-            cerr << "Invalid file size: " << argv[3] << endl;
+            cerr << "Invalid file size: " << argv[fileSizeArgIndex] << endl;
             windrop::Platform::cleanup();
             return 1;
         }
     }
 
     // Send the file
-    int result = sendFile(targetIp, filePath, fileSize);
+    int result = sendFile(targetIp, filePath, fileSize, requestMode, requestId);
 
     // Cleanup
     windrop::Platform::cleanup();

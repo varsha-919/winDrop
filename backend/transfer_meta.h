@@ -36,6 +36,12 @@ namespace transfer
     constexpr const char *MSG_RESET = "RESET";
     constexpr const char *MSG_ERROR = "ERROR";
 
+    // ==== Transfer Request Messages ====
+    constexpr const char *MSG_REQUEST = "REQUEST";
+    constexpr const char *MSG_REQUEST_ACCEPT = "REQUEST_ACCEPT";
+    constexpr const char *MSG_REQUEST_REJECT = "REQUEST_REJECT";
+    constexpr const char *MSG_DELIVERED_ACK = "DELIVERED_ACK";
+
     // Response codes
     constexpr const char *RESUME_OK = "OK";
     constexpr const char *RESUME_NO = "NO";
@@ -60,6 +66,7 @@ struct TransferMetadata
     std::string updatedAt; // ISO 8601 timestamp
     std::string senderIP;  // IP of sender
     uint32_t checksum;     // Final file checksum
+    std::string requestId; // Transfer request ID (for request mode)
 
     TransferMetadata()
         : fileSize(0), chunkSize(transfer::DEFAULT_CHUNK_SIZE), totalChunks(0), lastAckedChunk(-1), checksum(0)
@@ -84,7 +91,8 @@ struct TransferMetadata
         out << "  \"createdAt\": \"" << createdAt << "\",\n";
         out << "  \"updatedAt\": \"" << updatedAt << "\",\n";
         out << "  \"senderIP\": \"" << senderIP << "\",\n";
-        out << "  \"checksum\": " << checksum << "\n";
+        out << "  \"checksum\": " << checksum << ",\n";
+        out << "  \"requestId\": \"" << requestId << "\"\n";
         out << "}\n";
 
         out.close();
@@ -144,6 +152,8 @@ struct TransferMetadata
                 updatedAt = value;
             else if (key.find("senderIP") != std::string::npos)
                 senderIP = value;
+            else if (key.find("requestId") != std::string::npos)
+                requestId = value;
         }
 
         in.close();
@@ -409,6 +419,122 @@ public:
         std::ostringstream oss;
         oss << transfer::MSG_ERROR << ":" << message << "\n";
         return oss.str();
+    }
+
+    // ========================================================
+    // Transfer Request Messages
+    // ========================================================
+
+    /**
+     * Build REQUEST message
+     * Format: REQUEST:requestId|filename|filesize|fileType|senderName|senderIP\n
+     */
+    static std::string buildRequest(const std::string &requestId, const std::string &filename,
+                                    int64_t fileSize, const std::string &fileType,
+                                    const std::string &senderName, const std::string &senderIP)
+    {
+        std::ostringstream oss;
+        oss << transfer::MSG_REQUEST << ":"
+            << requestId << transfer::FIELD_DELIMITER
+            << filename << transfer::FIELD_DELIMITER
+            << fileSize << transfer::FIELD_DELIMITER
+            << fileType << transfer::FIELD_DELIMITER
+            << senderName << transfer::FIELD_DELIMITER
+            << senderIP << "\n";
+        return oss.str();
+    }
+
+    /**
+     * Parse REQUEST message
+     */
+    static bool parseRequest(const std::string &payload, std::string &requestId,
+                             std::string &filename, int64_t &fileSize,
+                             std::string &fileType, std::string &senderName,
+                             std::string &senderIP)
+    {
+        std::istringstream iss(payload);
+        std::string fileSizeStr;
+
+        std::getline(iss, requestId, transfer::FIELD_DELIMITER);
+        std::getline(iss, filename, transfer::FIELD_DELIMITER);
+        std::getline(iss, fileSizeStr, transfer::FIELD_DELIMITER);
+        std::getline(iss, fileType, transfer::FIELD_DELIMITER);
+        std::getline(iss, senderName, transfer::FIELD_DELIMITER);
+        std::getline(iss, senderIP, transfer::FIELD_DELIMITER);
+
+        try
+        {
+            fileSize = std::stoll(fileSizeStr);
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    /**
+     * Build REQUEST_ACCEPT message
+     * Format: REQUEST_ACCEPT:requestId\n
+     */
+    static std::string buildRequestAccept(const std::string &requestId)
+    {
+        std::ostringstream oss;
+        oss << transfer::MSG_REQUEST_ACCEPT << ":" << requestId << "\n";
+        return oss.str();
+    }
+
+    /**
+     * Parse REQUEST_ACCEPT message
+     */
+    static bool parseRequestAccept(const std::string &payload, std::string &requestId)
+    {
+        requestId = payload;
+        return !requestId.empty();
+    }
+
+    /**
+     * Build REQUEST_REJECT message
+     * Format: REQUEST_REJECT:requestId|reason\n
+     */
+    static std::string buildRequestReject(const std::string &requestId, const std::string &reason)
+    {
+        std::ostringstream oss;
+        oss << transfer::MSG_REQUEST_REJECT << ":"
+            << requestId << transfer::FIELD_DELIMITER
+            << reason << "\n";
+        return oss.str();
+    }
+
+    /**
+     * Parse REQUEST_REJECT message
+     */
+    static bool parseRequestReject(const std::string &payload, std::string &requestId, std::string &reason)
+    {
+        std::istringstream iss(payload);
+        std::getline(iss, requestId, transfer::FIELD_DELIMITER);
+        std::getline(iss, reason, transfer::FIELD_DELIMITER);
+        return true;
+    }
+
+    /**
+     * Build DELIVERED_ACK message
+     * Format: DELIVERED_ACK:requestId\n
+     */
+    static std::string buildDeliveredAck(const std::string &requestId)
+    {
+        std::ostringstream oss;
+        oss << transfer::MSG_DELIVERED_ACK << ":" << requestId << "\n";
+        return oss.str();
+    }
+
+    /**
+     * Parse DELIVERED_ACK message
+     */
+    static bool parseDeliveredAck(const std::string &payload, std::string &requestId)
+    {
+        requestId = payload;
+        return !requestId.empty();
     }
 };
 
