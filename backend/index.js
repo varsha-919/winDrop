@@ -9,15 +9,6 @@ const fs = require("fs");
 const app = express();
 const os = require("os");
 
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:");
-  console.error(err);
-});
-
-process.on("unhandledRejection", (reason) => {
-  console.error("UNHANDLED REJECTION:");
-  console.error(reason);
-});
 // Helper to get all IP addresses of the CURRENT machine
 function getMyIPs() {
   const ips = [];
@@ -33,26 +24,17 @@ function getMyIPs() {
 }
 const myIps = getMyIPs();
 app.use(cors());
-app.set("trust proxy", 1); // Enable to get correct client IP behind proxies
 app.use(express.json());
 
 // Return this machine's LAN IP
 app.get("/my-ip", (req, res) => {
-  const ips = getMyIPs();
-
-  console.log("🌐 Returning LAN IP:", ips[0]);
-
   res.json({
-    ip: ips[0] || "127.0.0.1",
+    ip: myIps[0] || "127.0.0.1",
   });
 });
 
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" },
-  pingInterval: 25000, // Ping every 25 seconds
-  pingTimeout: 60000, // Wait 60 seconds for pong
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 // 🔥 STORE UNIQUE PEERS
 const peers = new Map();
@@ -92,58 +74,72 @@ const SENDER =
 // --- SPAWN CORE ENGINE ---
 const coreEngine = spawn(CORE);
 
-coreEngine.on("error", (err) => {
-  console.error("========== CORE ENGINE ERROR ==========");
-  console.error(`❌ Core engine failed to start: ${err.message}`);
-  console.error("=========================================");
-});
+// --- MONITOR FOR INCOMING REQUEST FILES ---
+// Core.cpp writes requests to /tmp/windrop_request_<id>.json
+// We poll for these files and emit to frontend
+const { watch } = require("fs");
 
-coreEngine.on("exit", (code, signal) => {
-  console.error("========== CORE ENGINE EXIT ==========");
-  console.error(`❌ Core engine exited with code: ${code}, signal: ${signal}`);
-  console.error("=======================================");
-});
+let requestWatcher = null;
 
-coreEngine.stderr.on("data", (data) => {
-  console.error(`❌ [CORE STDERR]: ${data.toString()}`);
-});
+function startRequestMonitor() {
+  const tempDir = "/tmp";
+
+  // Poll every 1 second for new request files
+  setInterval(() => {
+    try {
+      const files = fs.readdirSync(tempDir);
+      files.forEach((file) => {
+        if (file.startsWith("windrop_request_") && file.endsWith(".json")) {
+          const filePath = path.join(tempDir, file);
+
+          try {
+            const content = fs.readFileSync(filePath, "utf8");
+            const requestData = JSON.parse(content);
+
+            console.log("📨 Incoming request:", requestData);
+
+            // Emit to local frontend via Socket.IO
+            io.emit("incoming_request", requestData);
+
+            // Store pending request
+            pendingRequests.set(requestData.requestId, {
+              id: requestData.requestId,
+              senderIp: requestData.senderIP,
+              filename: requestData.filename,
+              fileSize: requestData.fileSize,
+              fileType: requestData.fileType,
+              status: "pending",
+              createdAt: Date.now(),
+            });
+
+            // Remove the file after processing
+            fs.unlinkSync(filePath);
+            console.log("📝 Request file processed and removed");
+          } catch (err) {
+            console.error("Error processing request file:", err);
+          }
+        }
+      });
+    } catch (err) {
+      // Directory doesn't exist yet, ignore
+    }
+  }, 1000);
+
+  console.log("🔍 Request monitor started");
+}
+
+// Start the request monitor
+startRequestMonitor();
 
 coreEngine.stdout.on("data", (data) => {
   // When C++ core prints to stdout, this fires
   // data is a Buffer, needs .toString()
 
-  const output = data.toString();
-  const lines = output.trim().split("\n");
+  // C++ core outputs:
+  // "Founded Peer: DESKTOP:192.168.1.10 Alive"
+  const lines = data.toString().trim().split("\n");
 
   lines.forEach((line) => {
-    // Check for incoming request from core.cpp
-    if (line.startsWith("WINDROP_REQUEST:")) {
-      try {
-        const jsonStr = line.replace("WINDROP_REQUEST:", "");
-        const requestData = JSON.parse(jsonStr);
-
-        console.log("📨 Incoming request from core.cpp:", requestData);
-
-        // Emit to local frontend via Socket.IO
-        io.emit("incoming_request", requestData.data);
-
-        // Store pending request
-        const { requestId, senderIP, filename, fileSize, fileType } = requestData.data;
-        pendingRequests.set(requestId, {
-          id: requestId,
-          senderIp: senderIP,
-          filename,
-          fileSize,
-          fileType,
-          status: "pending",
-          createdAt: Date.now(),
-        });
-      } catch (err) {
-        console.error("Failed to parse request JSON:", err);
-      }
-      return;
-    }
-
     if (line.includes("Discovered peer:")) {
       const parts = line.split("Discovered peer: ");
 
@@ -229,7 +225,7 @@ app.post("/send", upload.single("file"), (req, res) => {
 });
 
 // --- TRANSFER REQUEST ENDPOINT ---
-// Uses TCP-based request flow through sender.cpp
+// Spawns sender.cpp in request mode - communicates via TCP
 app.post("/send-request", (req, res) => {
   const { targetIp, filename, fileSize, fileType } = req.body;
 
@@ -237,17 +233,12 @@ app.post("/send-request", (req, res) => {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  // Check if target is online via UDP discovery
+  // Check if target is online
   if (!peers.has(targetIp)) {
     return res
       .status(404)
       .json({ error: "Target device not found on network" });
   }
-
-  console.log(`📨 Sending TCP-based transfer request: ${filename} to ${targetIp}`);
-
-  // Create request ID
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
   // Get the uploaded file
   const uploadedFile = uploadedFiles.get(targetIp);
@@ -256,6 +247,11 @@ app.post("/send-request", (req, res) => {
   }
 
   const { filePath, fileSize: storedSize } = uploadedFile;
+
+  // Create request ID
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  console.log(`📨 Sending TCP-based transfer request: ${filename} to ${targetIp}`);
 
   // Store pending request
   pendingRequests.set(requestId, {
@@ -269,7 +265,7 @@ app.post("/send-request", (req, res) => {
     createdAt: Date.now(),
   });
 
-  // Spawn sender in REQUEST MODE
+  // Spawn sender in REQUEST mode
   // Usage: ./sender --request <target_ip> <request_id> <file_path> [file_size]
   const sender = spawn(SENDER, [
     "--request",
@@ -293,20 +289,17 @@ app.post("/send-request", (req, res) => {
 
   sender.on("close", (code) => {
     console.log(`🏁 Sender finished (Code: ${code})`);
+    console.log(`📤 Output: ${senderOutput}`);
 
     // Parse output to check for accept/reject
     if (senderOutput.includes("accepted")) {
-      // Request was accepted, proceed with actual transfer
       pendingRequests.get(requestId).status = "accepted";
-      res.json({ requestId, status: "accepted" });
+      // Notify frontend of acceptance
+      io.emit("request_accepted", { requestId, targetIp });
     } else if (senderOutput.includes("rejected")) {
       pendingRequests.get(requestId).status = "rejected";
-      res.json({ requestId, status: "rejected", reason: "Rejected by user" });
-    } else if (code !== 0) {
-      pendingRequests.get(requestId).status = "failed";
-      res.json({ requestId, status: "failed", reason: "Transfer failed" });
-    } else {
-      res.json({ requestId, status: "completed" });
+      // Notify frontend of rejection
+      io.emit("request_rejected", { requestId, reason: "Rejected by user" });
     }
 
     // Clean up uploaded file record
@@ -314,7 +307,41 @@ app.post("/send-request", (req, res) => {
   });
 
   // Return immediately - sender runs asynchronously
-  res.json({ requestId, status: "waiting" });
+  res.json({ requestId, status: "pending" });
+});
+
+// --- RESPOND TO TRANSFER REQUEST (ACCEPT/REJECT) ---
+// Writes response to /tmp/windrop_response_<requestId>.txt for core.cpp to read
+app.post("/respond-request", (req, res) => {
+  const { requestId, action } = req.body;
+
+  if (!requestId || !action) {
+    return res.status(400).json({ error: "Missing requestId or action" });
+  }
+
+  if (action !== "ACCEPT" && action !== "REJECT") {
+    return res.status(400).json({ error: "Invalid action" });
+  }
+
+  console.log(`📝 Responding to request ${requestId}: ${action}`);
+
+  // Write response to file for core.cpp to read
+  const responseFile = `/tmp/windrop_response_${requestId}.txt`;
+  try {
+    fs.writeFileSync(responseFile, action);
+    console.log(`📝 Response written to: ${responseFile}`);
+
+    // Update request status
+    const request = pendingRequests.get(requestId);
+    if (request) {
+      request.status = action === "ACCEPT" ? "accepted" : "rejected";
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Failed to write response file:", err);
+    res.status(500).json({ error: "Failed to respond" });
+  }
 });
 
 // --- HTTP ENDPOINT TO START SENDER.CPP (called after accept) ---
@@ -378,46 +405,9 @@ app.post("/start-transfer", (req, res) => {
   res.json({ success: true, requestId });
 });
 
-// --- RESPOND TO TRANSFER REQUEST (ACCEPT/REJECT) ---
-// This writes to core.cpp's stdin so it can forward to sender
-app.post("/respond-request", (req, res) => {
-  const { requestId, action } = req.body;
-
-  if (!requestId || !action) {
-    return res.status(400).json({ error: "Missing requestId or action" });
-  }
-
-  if (action !== "ACCEPT" && action !== "REJECT") {
-    return res.status(400).json({ error: "Invalid action" });
-  }
-
-  console.log(`📝 Responding to request ${requestId}: ${action}`);
-
-  // Write to core.cpp's stdin
-  if (coreEngine && coreEngine.stdin) {
-    coreEngine.stdin.write(action + "\n");
-
-    // Update request status
-    const request = pendingRequests.get(requestId);
-    if (request) {
-      request.status = action === "ACCEPT" ? "accepted" : "rejected";
-    }
-
-    res.json({ success: true });
-  } else {
-    res.status(500).json({ error: "Core engine not available" });
-  }
-});
-
 // --- SOCKET CONNECTION ---
 io.on("connection", (socket) => {
-  console.log("========== BACKEND: CLIENT CONNECTED ==========");
-  console.log(`🔌 New connection`);
-  console.log(`   socket.id: ${socket.id}`);
-  console.log(`   remoteAddress: ${socket.handshake.address}`);
-  console.log(`   User-Agent: ${socket.handshake.headers["user-agent"]}`);
-  console.log(`   Current active connections: ${io.engine.clientsCount}`);
-  console.log("=================================================");
+  console.log("🔌 Client connected");
 
   // send current list immediately
   // This ensures new clients see existing peers immediately
@@ -431,75 +421,22 @@ io.on("connection", (socket) => {
   // 🔥 HANDLE TRANSFER REQUEST (from sender)
   socket.on("transfer_request", (data) => {
     const { targetIp, filename, fileSize, fileType } = data;
-    // Ensure clean IP (trim whitespace)
-    const cleanTargetIp = targetIp ? targetIp.trim() : targetIp;
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     // Get sender info
-    const senderName = socket.ip || "Unknown";
+    const senderName = peers.get(socket.handshake.address) || "Unknown";
 
-    console.log("========== TRANSFER REQUEST DEBUG ==========");
-    console.log(`📨 [1] transfer_request received`);
     console.log(
-      `   targetIp: "${cleanTargetIp}" (type: ${typeof cleanTargetIp})`,
-    );
-    console.log(`   filename: ${filename}`);
-    console.log(`   sender socket.id: ${socket.id}`);
-    console.log(`   sender socket.ip: ${socket.ip}`);
-    console.log(`   sender handshake address: ${socket.handshake.address}`);
-
-    // Debug: List ALL sockets and their rooms
-    console.log(`   [2] ALL sockets:`);
-    for (const [id, sock] of io.sockets.sockets) {
-      console.log(
-        `      socket ${id}: ip=${sock.ip}, rooms=${Array.from(sock.rooms).join(",")}`,
-      );
-    }
-
-    // Debug: List all IP rooms (including exact match)
-    console.log(`   [3] All IP rooms:`);
-    for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-      if (roomName.includes(".") || /^192\./.test(roomName)) {
-        console.log(
-          `      Room "${roomName}": ${Array.from(sockets).join(", ")}`,
-        );
-      }
-    }
-
-    // Debug: Also check raw rooms map
-    console.log(`   [3b] Raw rooms check:`);
-    const allRooms = io.sockets.adapter.rooms;
-    for (const [roomName, sockets] of allRooms) {
-      if (typeof roomName === "string" && roomName.length > 6) {
-        console.log(`      "${roomName}" -> ${Array.from(sockets).join(", ")}`);
-      }
-    }
-
-    // Check exact room match
-    const room = io.sockets.adapter.rooms.get(cleanTargetIp);
-    console.log(
-      `   [4] Exact room lookup for "${cleanTargetIp}": ${room ? Array.from(room).join(", ") : "NOT FOUND"}`,
-    );
-
-    // Also try finding by iterating
-    let foundRoom = null;
-    for (const [name, socks] of io.sockets.adapter.rooms) {
-      if (name === cleanTargetIp) {
-        foundRoom = socks;
-        break;
-      }
-    }
-    console.log(
-      `   [4b] Iterated room lookup: ${foundRoom ? Array.from(foundRoom).join(", ") : "NOT FOUND"}`,
+      `📨 Transfer request: ${filename} (${fileSize} bytes) from ${targetIp}`,
     );
 
     // Store pending request with socket ID for direct response
     pendingRequests.set(requestId, {
       id: requestId,
       senderSocketId: socket.id,
-      senderIp: socket.ip,
+      senderIp: socket.handshake.address,
       senderName: senderName,
-      targetIp: cleanTargetIp,
+      targetIp: targetIp,
       filename: filename,
       fileSize: fileSize,
       fileType: fileType,
@@ -507,145 +444,15 @@ io.on("connection", (socket) => {
       createdAt: Date.now(),
     });
 
-    console.log(
-      `   [5] Emitting incoming_request to room "${cleanTargetIp}"...`,
-    );
-
-    // Check if any sockets are in that room BEFORE emitting
-    let socketsInRoom = io.sockets.adapter.rooms.get(cleanTargetIp);
-    if (!socketsInRoom || socketsInRoom.size === 0) {
-      console.log(`   ⚠️ WARNING: Room "${cleanTargetIp}" is EMPTY!`);
-
-      // 🔥 Check if receiver is connected at all
-      let receiverSocket = null;
-      for (const [sockId, sock] of io.sockets.sockets) {
-        if (sock.ip === cleanTargetIp) {
-          receiverSocket = sockId;
-          break;
-        }
-      }
-
-      if (!receiverSocket) {
-        console.log(
-          `   ❌ RECEIVER OFFLINE: No socket with IP ${cleanTargetIp}`,
-        );
-        console.log(`   📡 Connected sockets:`);
-        for (const [sockId, sock] of io.sockets.sockets) {
-          console.log(`      ${sockId}: ip=${sock.ip}`);
-        }
-
-        // 🔥 Check if any peer with this IP exists in our peer list
-        // Even if Socket.IO disconnected, peer might still be reachable
-        const peerExists = peers.has(cleanTargetIp);
-        console.log(`   📡 Peer in UDP list: ${peerExists ? "YES" : "NO"}`);
-
-        if (peerExists) {
-          console.log(
-            `   ⚠️ Peer is in peer list but Socket.IO disconnected. Retrying in 2s...`,
-          );
-          // Give receiver time to reconnect
-          setTimeout(() => {
-            // Try again
-            for (const [sockId, sock] of io.sockets.sockets) {
-              if (sock.ip === cleanTargetIp) {
-                console.log(`   ✅ Receiver reconnected! Emitting...`);
-                io.to(sockId).emit("incoming_request", {
-                  requestId,
-                  senderName: senderName,
-                  senderIp: socket.ip,
-                  filename,
-                  fileSize,
-                  fileType,
-                });
-                // Set timeout
-                const timeout = setTimeout(() => {
-                  if (pendingRequests.has(requestId)) {
-                    pendingRequests.delete(requestId);
-                    socket.emit("request_rejected", {
-                      requestId,
-                      reason: "Request timed out",
-                    });
-                  }
-                }, 30000);
-                requestTimeouts.set(requestId, timeout);
-                socket.emit("request_queued", { requestId });
-                return;
-              }
-            }
-            // Still not connected after retry
-            socket.emit("request_rejected", {
-              requestId,
-              reason: "Receiver disconnected",
-            });
-            pendingRequests.delete(requestId);
-          }, 2000);
-
-          console.log("========== END DEBUG (will retry) ==========");
-          socket.emit("request_queued", { requestId });
-          return;
-        }
-
-        console.log("========== END DEBUG ==========");
-
-        // Notify sender that receiver is offline
-        socket.emit("request_rejected", {
-          requestId,
-          reason: "Receiver is offline or disconnected",
-        });
-        pendingRequests.delete(requestId);
-        return;
-      }
-
-      console.log(
-        `   ✅ Found receiver by socket.ip! socket.id=${receiverSocket}`,
-      );
-      io.to(receiverSocket).emit("incoming_request", {
-        requestId,
-        senderName: senderName,
-        senderIp: socket.ip,
-        filename,
-        fileSize,
-        fileType,
-      });
-      console.log(`   [6] Fallback emit done.`);
-      console.log("========== END DEBUG ==========");
-
-      // Set timeout (30 seconds)
-      const timeout = setTimeout(() => {
-        if (pendingRequests.has(requestId)) {
-          pendingRequests.delete(requestId);
-          socket.emit("request_rejected", {
-            requestId,
-            reason: "Request timed out",
-          });
-        }
-      }, 30000);
-      requestTimeouts.set(requestId, timeout);
-
-      // Send request ID back to sender so they can track it
-      socket.emit("request_queued", { requestId });
-      return; // Exit early, don't do normal emit
-    } else {
-      console.log(
-        `   ✅ Room has ${socketsInRoom.size} socket(s): ${Array.from(socketsInRoom).join(", ")}`,
-      );
-    }
-
-    // Broadcast to receiver (cleanTargetIp)
-    const emitResult = io.to(cleanTargetIp).emit("incoming_request", {
+    // Broadcast to receiver (targetIp)
+    io.to(targetIp).emit("incoming_request", {
       requestId,
       senderName: senderName,
-      senderIp: socket.ip,
+      senderIp: socket.handshake.address,
       filename,
       fileSize,
       fileType,
     });
-
-    console.log(
-      `   [6] Emit result: ${emitResult ? "success" : "failed/no-recipients"}`,
-    );
-    console.log(`   pendingRequests now has ${pendingRequests.size} entries`);
-    console.log("========== END DEBUG ==========");
 
     // Set timeout (30 seconds)
     const timeout = setTimeout(() => {
@@ -720,12 +527,11 @@ io.on("connection", (socket) => {
     request.rejectReason = reason;
 
     // Notify sender
-    if (request.senderSocketId) {
-      io.to(request.senderSocketId).emit("request_rejected", {
-        requestId,
-        reason: reason || "Rejected by user",
-      });
-    }
+    io.to(senderIp).emit("request_rejected", {
+      requestId,
+      reason: reason || "Rejected by user",
+    });
+
     // Clean up
     pendingRequests.delete(requestId);
   });
@@ -785,42 +591,17 @@ io.on("connection", (socket) => {
   // Store socket IP for targeting
   socket.on("register", (data) => {
     const { ip } = data;
-    // Trim whitespace to ensure clean room names
-    const cleanIp = ip ? ip.trim() : ip;
-    socket.ip = cleanIp;
-    socket.join(cleanIp);
-    console.log(`📱 Client registered with IP: ${cleanIp}`);
-    console.log(`🔗 ${cleanIp} -> ${socket.id}`);
-
-    // Debug: show all rooms after registration
-    console.log(`   [DEBUG] All IP rooms after registration:`);
-    for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-      if (roomName.includes(".") || /^192\./.test(roomName)) {
-        console.log(
-          `      Room "${roomName}": ${Array.from(sockets).join(", ")}`,
-        );
-      }
-    }
+    socket.ip = ip;
+    socket.join(ip);
+    console.log(`📱 Client registered with IP: ${ip}`);
   });
 
   // Handle disconnect
-  socket.on("disconnect", (reason) => {
-    console.log("========== BACKEND: CLIENT DISCONNECTED ==========");
-    console.log(`🔌 Client disconnected: ${socket.id}`);
-    console.log(`   Reason: "${reason}"`);
-    console.log(`   Was registered with IP: ${socket.ip}`);
-    console.log(`   Remaining connections: ${io.engine.clientsCount}`);
-    console.log(`   Active IP rooms after disconnect:`);
-    for (const [roomName, sockets] of io.sockets.adapter.rooms) {
-      if (roomName.includes(".") || /^192\./.test(roomName)) {
-        console.log(
-          `      Room "${roomName}": ${Array.from(sockets).join(", ")}`,
-        );
-      }
-    }
+  socket.on("disconnect", () => {
+    console.log("🔌 Client disconnected");
     // Clean up any pending requests from this client
     for (const [reqId, request] of pendingRequests.entries()) {
-      if (request.senderSocketId === socket.id) {
+      if (request.senderIp === socket.handshake.address) {
         const timeout = requestTimeouts.get(reqId);
         if (timeout) {
           clearTimeout(timeout);
@@ -835,15 +616,3 @@ io.on("connection", (socket) => {
 server.listen(5001, () =>
   console.log("✅ Lighthouse Backend at http://localhost:5001"),
 );
-
-// 🔥 Monitor server errors
-server.on("error", (err) => {
-  console.error("========== SERVER ERROR ==========");
-  console.error(`Server error: ${err.message}`);
-  console.error("===================================");
-});
-
-// 🔥 Keep-alive to prevent idle disconnects
-setInterval(() => {
-  console.log("💓 Server heartbeat - active connections:", io.engine.clientsCount);
-}, 30000);

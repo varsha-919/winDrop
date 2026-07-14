@@ -3,88 +3,9 @@ import io from "socket.io-client";
 import axios from "axios";
 import "./App.css";
 
-// 🔥 GLOBAL SOCKET INSTANCE
-let socketInstance = null;
-
-// Get or create socket - prevents multiple instances
-function getSocket() {
-  if (!socketInstance) {
-    console.log("========== CREATING NEW SOCKET INSTANCE ==========");
-    socketInstance = io(`http://${window.location.hostname}:5001`, {
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
-    });
-  }
-  return socketInstance;
-}
-
-const socket = getSocket();
-
-// 🔥 DETAILED SOCKET LIFECYCLE DEBUGGING
-socket.on("connect", () => {
-  console.log("========== SOCKET CONNECT ==========");
-  console.log(`✅ Connected! socket.id: ${socket.id}`);
-  console.log(`   Connected: ${socket.connected}`);
-  console.log(`   URL: ${socket.io.uri}`);
-  console.log("=====================================");
-});
-
-socket.on("disconnect", (reason) => {
-  console.log("========== SOCKET DISCONNECT ==========");
-  console.log(`❌ Disconnected! Reason: "${reason}"`);
-  console.log(`   socket.id: ${socket.id}`);
-  console.log(`   Connected: ${socket.connected}`);
-  console.log(`   Engine state: ${socket.engine?.transport?.name || 'unknown'}`);
-  console.log("==========================================");
-});
-
-socket.on("connect_error", (err) => {
-  console.log("========== SOCKET CONNECT ERROR ==========");
-  console.log(`⚠️ Connection error: ${err.message}`);
-  console.log(`   Description: ${err.description}`);
-  console.log(`   Context: ${err.context}`);
-  console.log("==========================================");
-});
-
-socket.on("reconnect_attempt", (attemptNumber) => {
-  console.log("========== SOCKET RECONNECT ATTEMPT ==========");
-  console.log(`🔄 Reconnection attempt #${attemptNumber}`);
-  console.log("==============================================");
-});
-
-socket.on("reconnect", (attemptNumber) => {
-  console.log("========== SOCKET RECONNECTED ==========");
-  console.log(`✅ Reconnected after ${attemptNumber} attempts`);
-  console.log(`   socket.id: ${socket.id}`);
-  console.log("==========================================");
-});
-
-socket.on("reconnect_error", (err) => {
-  console.log("========== SOCKET RECONNECT ERROR ==========");
-  console.log(`⚠️ Reconnect error: ${err.message}`);
-  console.log("============================================");
-});
-
-socket.on("reconnect_failed", () => {
-  console.log("========== SOCKET RECONNECT FAILED ==========");
-  console.log(`❌ All reconnection attempts failed`);
-  console.log("=============================================");
-});
+const socket = io(`http://${window.location.hostname}:5001`);
 
 function App() {
-  // Track component mounts to detect StrictMode double-render
-  const mountCount = React.useRef(0);
-  mountCount.current += 1;
-
-  console.log("========== APP MOUNT ==========");
-  console.log(`   Mount #${mountCount.current}`);
-  console.log(`   socket.connected: ${socket.connected}`);
-  console.log(`   socket.id: ${socket.id}`);
-  console.log("===============================");
-
   const [peers, setPeers] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
   const [isSearching, setIsSearching] = useState(true);
@@ -105,12 +26,6 @@ function App() {
 
   // 🔥 REGISTER THIS CLIENT'S IP
   useEffect(() => {
-    console.log("========== USEEFFECT MOUNT ==========");
-    console.log(`   Effect running, socket.connected: ${socket.connected}`);
-    console.log(`   socket.id: ${socket.id}`);
-    console.log(`   Stack trace:`);
-    console.trace();
-
     const registerClient = async () => {
       try {
         const res = await axios.get(
@@ -121,10 +36,7 @@ function App() {
           ip: res.data.ip,
         });
 
-        console.log("========== REGISTRATION ==========");
-        console.log(`Registered with IP: ${res.data.ip}`);
-        console.log(`socket.id: ${socket.id}`);
-        console.log("===================================");
+        console.log("Registered with:", res.data.ip);
       } catch (err) {
         console.error("Registration failed:", err);
       }
@@ -139,12 +51,7 @@ function App() {
 
     // 🔥 HANDLE INCOMING REQUEST
     socket.on("incoming_request", (data) => {
-      console.log("========== RECEIVER DEBUG ==========");
-      console.log(`[RECEIVER] incoming_request received`);
-      console.log(`  data:`, data);
-      console.log(`  socket.id: ${socket.id}`);
-      console.log(`  Will show popup: YES`);
-      console.log("========== END DEBUG ==========");
+      console.log("📥 Incoming request:", data);
       setIncomingRequest(data);
       setReceiveStatus("pending");
     });
@@ -198,9 +105,6 @@ function App() {
     });
 
     return () => {
-      console.log("========== USEEFFECT CLEANUP ==========");
-      console.log("   Cleaning up socket listeners (sendingTo changed)");
-      console.log(`   socket.connected: ${socket.connected}`);
       socket.off("peers_list");
       socket.off("incoming_request");
       socket.off("request_accepted");
@@ -208,7 +112,6 @@ function App() {
       socket.off("transfer_delivered");
       socket.off("transfer_progress");
       socket.off("request_cancelled");
-      console.log("========================================");
     };
   }, [sendingTo]);
 
@@ -265,12 +168,6 @@ function App() {
 
   const handleSend = async (targetIp) => {
     if (!selectedFile) return;
-
-    console.log("========== HANDLE SEND ==========");
-    console.log(`   targetIp: ${targetIp}`);
-    console.log(`   socket.connected: ${socket.connected}`);
-    console.log(`   socket.id: ${socket.id}`);
-
     setSendingTo(targetIp);
     setSendStatus(null);
     setTransferProgress(0);
@@ -286,7 +183,7 @@ function App() {
         `http://${window.location.hostname}:5001/send`,
         formData,
       );
-      // File uploaded, now send request
+      // File uploaded, now send TCP-based request
     } catch (err) {
       console.error("File upload failed:", err);
       setSendStatus({ success: false, ip: targetIp });
@@ -294,7 +191,8 @@ function App() {
       return;
     }
 
-    // Step 2: Send TCP-based transfer request via HTTP
+    // Step 2: Send TCP-based transfer request via HTTP endpoint
+    // This will spawn sender.cpp in request mode, which communicates via TCP
     setSendStatus({ waiting: true, ip: targetIp });
 
     try {
@@ -320,7 +218,7 @@ function App() {
         setSendStatus({ success: false, ip: targetIp });
         setSendingTo(null);
       }
-      // If status is "waiting", the transfer will complete asynchronously
+      // If status is "pending" or "waiting", wait for socket events
     } catch (err) {
       console.error("Transfer request failed:", err);
       setSendStatus({ success: false, ip: targetIp });
@@ -334,19 +232,19 @@ function App() {
 
     const { requestId } = incomingRequest;
 
-    // Send ACCEPT to backend via HTTP (writes to core.cpp stdin)
+    // Send ACCEPT to backend via HTTP (writes to response file for core.cpp)
     try {
       await axios.post(
         `http://${window.location.hostname}:5001/respond-request`,
         { requestId, action: "ACCEPT" },
       );
-
-      setReceiveStatus("accepted");
-      setIncomingRequest(null);
-      setIsReceiving(true);
     } catch (err) {
       console.error("Failed to accept:", err);
     }
+
+    setReceiveStatus("accepted");
+    setIncomingRequest(null);
+    setIsReceiving(true);
   };
 
   // 🔥 HANDLE REJECT
@@ -355,7 +253,7 @@ function App() {
 
     const { requestId } = incomingRequest;
 
-    // Send REJECT to backend via HTTP (writes to core.cpp stdin)
+    // Send REJECT to backend via HTTP (writes to response file for core.cpp)
     try {
       await axios.post(
         `http://${window.location.hostname}:5001/respond-request`,
@@ -366,6 +264,7 @@ function App() {
     }
 
     setIncomingRequest(null);
+    setReceiveStatus(null);
     setReceiveStatus(null);
   };
 

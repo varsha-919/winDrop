@@ -314,24 +314,24 @@ void runTcpServer()
                              << " (" << fileSize << " bytes) from " << senderName
                              << " (" << senderIP << ")" << endl;
 
-                        // Generate JSON for Express to parse
-                        // Format: WINDROP_REQUEST:JSON
-                        cout << "WINDROP_REQUEST:"
-                            << "{\"type\":\"incoming_request\","
-                            << "\"data\":{"
-                            << "\"requestId\":\"" << requestId << "\","
-                            << "\"filename\":\"" << filename << "\","
-                            << "\"fileSize\":" << fileSize << ","
-                            << "\"fileType\":\"" << fileType << "\","
-                            << "\"senderName\":\"" << senderName << "\","
-                            << "\"senderIP\":\"" << senderIP << "\""
-                            << "}}"
-                            << endl;
+                        // Write request to a file for the backend to read
+                        string requestFile = "/tmp/windrop_request_" + requestId + ".json";
+                        ofstream reqFile(requestFile);
+                        if (reqFile.is_open())
+                        {
+                            reqFile << "{\"requestId\":\"" << requestId << "\","
+                                    << "\"filename\":\"" << filename << "\","
+                                    << "\"fileSize\":" << fileSize << ","
+                                    << "\"fileType\":\"" << fileType << "\","
+                                    << "\"senderName\":\"" << senderName << "\","
+                                    << "\"senderIP\":\"" << senderIP << "\"}";
+                            reqFile.close();
+                            cout << "📝 Request written to: " << requestFile << endl;
+                        }
 
-                        // Wait for ACCEPT or REJECT from Express via stdin
+                        // Poll for response file
                         cout << "[RECEIVER] Waiting for user response..." << endl;
-
-                        // Use non-blocking stdin read with timeout
+                        string responseFile = "/tmp/windrop_response_" + requestId + ".txt";
                         string userResponse;
                         bool gotResponse = false;
                         int timeoutSeconds = 30;
@@ -339,33 +339,20 @@ void runTcpServer()
 
                         while (!gotResponse)
                         {
-                            // Check for data on stdin (from Express)
-                            // Use a simple polling mechanism
-                            fd_set stdin_fds;
-                            FD_ZERO(&stdin_fds);
-                            FD_SET(STDIN_FILENO, &stdin_fds);
-
-                            struct timeval tv;
-                            tv.tv_sec = 1;
-                            tv.tv_usec = 0;
-
-                            int ready = select(STDIN_FILENO + 1, &stdin_fds, NULL, NULL, &tv);
-                            if (ready > 0)
+                            // Check if response file exists
+                            ifstream respFile(responseFile);
+                            if (respFile.is_open())
                             {
-                                char respBuf[256];
-                                int bytesRead = read(STDIN_FILENO, respBuf, sizeof(respBuf) - 1);
-                                if (bytesRead > 0)
-                                {
-                                    respBuf[bytesRead] = '\0';
-                                    userResponse += string(respBuf, bytesRead);
+                                getline(respFile, userResponse);
+                                respFile.close();
 
-                                    // Check for complete response
-                                    size_t newlinePos = userResponse.find('\n');
-                                    if (newlinePos != string::npos)
-                                    {
-                                        userResponse = userResponse.substr(0, newlinePos);
-                                        gotResponse = true;
-                                    }
+                                // Remove the response file
+                                remove(responseFile.c_str());
+
+                                if (!userResponse.empty())
+                                {
+                                    gotResponse = true;
+                                    cout << "📝 Got response: " << userResponse << endl;
                                 }
                             }
 
@@ -376,7 +363,13 @@ void runTcpServer()
                                 cout << "[RECEIVER] Request timeout" << endl;
                                 break;
                             }
+
+                            // Sleep 500ms between checks
+                            this_thread::sleep_for(chrono::milliseconds(500));
                         }
+
+                        // Clean up request file
+                        remove(requestFile.c_str());
 
                         // Send response to sender
                         if (userResponse == "ACCEPT")
@@ -396,18 +389,11 @@ void runTcpServer()
                             transferComplete = false;
                             continue;
                         }
-                        else if (userResponse == "REJECT")
-                        {
-                            cout << "[RECEIVER] User REJECTED the request" << endl;
-                            string rejectMsg = TransferProtocol::buildRequestReject(requestId, "Rejected by user");
-                            send(newSocket, rejectMsg.c_str(), rejectMsg.length(), 0);
-                            windrop::SocketUtils::closeSocket(newSocket);
-                            break;
-                        }
                         else
                         {
-                            cout << "[RECEIVER] No response or timeout, rejecting" << endl;
-                            string rejectMsg = TransferProtocol::buildRequestReject(requestId, "Request timed out");
+                            cout << "[RECEIVER] User REJECTED or timeout" << endl;
+                            string rejectReason = userResponse.empty() ? "Request timed out" : "Rejected by user";
+                            string rejectMsg = TransferProtocol::buildRequestReject(requestId, rejectReason);
                             send(newSocket, rejectMsg.c_str(), rejectMsg.length(), 0);
                             windrop::SocketUtils::closeSocket(newSocket);
                             break;
