@@ -304,7 +304,7 @@ io.on("connection", (socket) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     // Get sender info
-    const senderName = peers.get(socket.handshake.address) || "Unknown";
+    const senderName = socket.ip || "Unknown";
 
     console.log(
       `📨 Transfer request: ${filename} (${fileSize} bytes) from ${targetIp}`,
@@ -314,7 +314,7 @@ io.on("connection", (socket) => {
     pendingRequests.set(requestId, {
       id: requestId,
       senderSocketId: socket.id,
-      senderIp: socket.handshake.address,
+      senderIp: socket.ip,
       senderName: senderName,
       targetIp: targetIp,
       filename: filename,
@@ -407,11 +407,12 @@ io.on("connection", (socket) => {
     request.rejectReason = reason;
 
     // Notify sender
-    io.to(senderIp).emit("request_rejected", {
-      requestId,
-      reason: reason || "Rejected by user",
-    });
-
+    if (request.senderSocketId) {
+      io.to(request.senderSocketId).emit("request_rejected", {
+        requestId,
+        reason: reason || "Rejected by user",
+      });
+    }
     // Clean up
     pendingRequests.delete(requestId);
   });
@@ -481,7 +482,7 @@ io.on("connection", (socket) => {
     console.log("🔌 Client disconnected");
     // Clean up any pending requests from this client
     for (const [reqId, request] of pendingRequests.entries()) {
-      if (request.senderIp === socket.handshake.address) {
+      if (request.senderSocketId === socket.id) {
         const timeout = requestTimeouts.get(reqId);
         if (timeout) {
           clearTimeout(timeout);
