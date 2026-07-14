@@ -578,22 +578,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    // Parse optional file size
-    int fileSizeArgIndex = requestMode ? 4 + argOffset : 3;
-    if (argc >= fileSizeArgIndex)
-    {
-        try
-        {
-            fileSize = stoll(argv[fileSizeArgIndex]);
-        }
-        catch (...)
-        {
-            cerr << "Invalid file size: " << argv[fileSizeArgIndex] << endl;
-            windrop::Platform::cleanup();
-            return 1;
-        }
-    }
-
+    
     // Send the file
     int result = sendFile(targetIp, filePath, fileSize, requestMode, requestId);
 

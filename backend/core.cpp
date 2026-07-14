@@ -383,7 +383,7 @@ void runTcpServer()
 
                             // Continue to receive HEADER and chunks (new transfer)
                             // Reset state for new transfer
-                            outfile.open(windrop::FileUtils::getTempPath(filename), ios::binary);
+
                             nextExpectedChunk = 0;
                             transferComplete = false;
                             continue;
@@ -429,14 +429,14 @@ void runTcpServer()
                                 cout << "🔄 Existing transfer found, last chunk: "
                                      << meta.lastAckedChunk << endl;
 
+                                // Open temp file in append mode
+                                outfile.open(tempPath, ios::binary | ios::app);
+                                nextExpectedChunk = meta.lastAckedChunk + 1;
+
                                 // Send OK response with last chunk
                                 string response = TransferProtocol::buildResumeResponse(true, meta.lastAckedChunk);
                                 cout << "[RECEIVER] Step 2: Sending HEADER response (resume OK)" << endl;
                                 send(newSocket, response.c_str(), response.length(), 0);
-
-                                // Open temp file in append mode
-                                outfile.open(tempPath, ios::binary | ios::app);
-                                nextExpectedChunk = meta.lastAckedChunk + 1;
 
                                 cout << "🔄 Resuming from chunk " << nextExpectedChunk << endl;
                             }
@@ -449,7 +449,7 @@ void runTcpServer()
                                 outfile.open(tempPath, ios::binary);
                                 nextExpectedChunk = 0;
 
-                                // Send NO response
+                                // Send NO response for fresh transfer
                                 string response = TransferProtocol::buildResumeResponse(false);
                                 cout << "[RECEIVER] Step 2: Sending HEADER response (fresh)" << endl;
                                 send(newSocket, response.c_str(), response.length(), 0);
@@ -475,7 +475,7 @@ void runTcpServer()
                             // Save initial metadata
                             meta.save(metaPath);
 
-                            // Send NO response (fresh transfer)
+                            // Send NO response for fresh transfer
                             string response = TransferProtocol::buildResumeResponse(false);
                             cout << "[RECEIVER] Step 2: Sending HEADER response (fresh)" << endl;
                             send(newSocket, response.c_str(), response.length(), 0);
@@ -563,6 +563,15 @@ void runTcpServer()
                         {
                             // Correct chunk - write to file
                             outfile.write(chunkData.c_str(), actualSize);
+
+                            if (!outfile)
+                            {
+                                cout << "Write failed!" << endl;
+                                transferComplete = true;
+                                break;
+                            }
+
+                            outfile.flush();
                             nextExpectedChunk++;
 
                             cout << "📦 Chunk " << chunkIndex << " received (" << actualSize << " bytes)" << endl;

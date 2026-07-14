@@ -263,13 +263,9 @@ bool windrop::FileUtils::atomicRename(const std::string &tempPath, const std::st
 {
 #ifdef WINDROP_PLATFORM_WINDOWS
     // Windows: use std::filesystem::rename (which is atomic on Windows)
-    try {
-        fs::rename(tempPath, finalPath);
-        return true;
-    } catch (const fs::system_error& e) {
-        std::cerr << "Rename failed: " << e.what() << std::endl;
-        return false;
-    }
+    std::error_code ec;
+    fs::rename(tempPath, finalPath, ec);
+    return !ec;
 #else
     // POSIX: rename() is atomic
     return rename(tempPath.c_str(), finalPath.c_str()) == 0;
@@ -283,16 +279,22 @@ bool windrop::FileUtils::cleanupTemp(const std::string &filename)
     std::string metaPath = getMetaPath(filename);
 
 #ifdef WINDROP_PLATFORM_WINDOWS
-    try {
-        if (fs::exists(tempPath)) fs::remove(tempPath);
-        if (fs::exists(metaPath)) fs::remove(metaPath);
-    } catch (const fs::system_error& e) {
-        std::cerr << "Cleanup failed: " << e.what() << std::endl;
-        success = false;
-    }
+    std::error_code ec;
+
+    if (fs::exists(tempPath))
+        fs::remove(tempPath, ec);
+
+    ec.clear();
+
+    if (fs::exists(metaPath))
+        fs::remove(metaPath, ec);
+
+    return true;
 #else
-    if (remove(tempPath.c_str()) != 0 && errno != ENOENT) success = false;
-    if (remove(metaPath.c_str()) != 0 && errno != ENOENT) success = false;
+    if (remove(tempPath.c_str()) != 0 && errno != ENOENT)
+        success = false;
+    if (remove(metaPath.c_str()) != 0 && errno != ENOENT)
+        success = false;
 #endif
 
     return success;
@@ -301,14 +303,17 @@ bool windrop::FileUtils::cleanupTemp(const std::string &filename)
 int64_t windrop::FileUtils::getFileSize(const std::string &filepath)
 {
 #ifdef WINDROP_PLATFORM_WINDOWS
-    try {
-        return fs::file_size(filepath);
-    } catch (const fs::system_error& e) {
+    std::error_code ec;
+    auto size = fs::file_size(filepath, ec);
+
+    if (ec)
         return -1;
-    }
+
+    return static_cast<int64_t>(size);
 #else
     struct stat st;
-    if (stat(filepath.c_str(), &st) == 0) {
+    if (stat(filepath.c_str(), &st) == 0)
+    {
         return st.st_size;
     }
     return -1;
@@ -317,16 +322,31 @@ int64_t windrop::FileUtils::getFileSize(const std::string &filepath)
 
 uint32_t windrop::FileUtils::computeChecksum(const std::string &filepath)
 {
+    std::cout << "CHECKSUM PATH = "
+              << filepath << std::endl;
+
     std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) return 0;
+
+    if (!file.is_open())
+    {
+        std::cout << "CHECKSUM FAILED TO OPEN FILE"
+                  << std::endl;
+        return 0;
+    }
+
+    std::cout << "CHECKSUM FILE OPENED"
+              << std::endl;
 
     uint32_t sum = 0;
     char buffer[4096];
-    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
+    while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0)
+    {
         std::streamsize bytes = file.gcount();
-        for (std::streamsize i = 0; i < bytes; ++i) {
+        for (std::streamsize i = 0; i < bytes; ++i)
+        {
             sum += static_cast<unsigned char>(buffer[i]);
         }
     }
+    std::cout<<sum<<std::endl;
     return sum;
 }
