@@ -77,6 +77,7 @@ void runUdpBroadcaster()
         windrop::SleepUtils::sleep(config::BROADCAST_INTERVAL_MS);
     }
 
+
     windrop::SocketUtils::closeSocket(sock);
 }
 
@@ -135,7 +136,7 @@ void runUdpListener()
             // Skip own broadcasts
             if (receivedMsg.find(myName) == string::npos)
             {
-                cout << "👤 Discovered peer: " << buffer << endl;
+                cout << "Discovered peer: " << buffer << endl;
             }
         }
     }
@@ -189,6 +190,7 @@ void runTcpServer()
         struct sockaddr_in clientAddr;
         socklen_t addrLen = sizeof(clientAddr);
         WindropSocket newSocket = accept(serverFd, (struct sockaddr *)&clientAddr, &addrLen);
+        // serverFd continuously listens and newSocket is for communication with this client.
 
         if (newSocket == WINDROP_INVALID_SOCKET)
         {
@@ -300,6 +302,7 @@ void runTcpServer()
                 // Handle each message type
                 if (msgType == transfer::MSG_HEADER)
                 {
+                    cout << "[RECEIVER] Step 1: HEADER received" << endl;
                     // New transfer request
                     string filename;
                     int64_t fileSize;
@@ -329,6 +332,7 @@ void runTcpServer()
 
                                 // Send OK response with last chunk
                                 string response = TransferProtocol::buildResumeResponse(true, meta.lastAckedChunk);
+                                cout << "[RECEIVER] Step 2: Sending HEADER response (resume OK)" << endl;
                                 send(newSocket, response.c_str(), response.length(), 0);
 
                                 // Open temp file in append mode
@@ -348,6 +352,7 @@ void runTcpServer()
 
                                 // Send NO response
                                 string response = TransferProtocol::buildResumeResponse(false);
+                                cout << "[RECEIVER] Step 2: Sending HEADER response (fresh)" << endl;
                                 send(newSocket, response.c_str(), response.length(), 0);
                             }
                         }
@@ -373,6 +378,7 @@ void runTcpServer()
 
                             // Send NO response (fresh transfer)
                             string response = TransferProtocol::buildResumeResponse(false);
+                            cout << "[RECEIVER] Step 2: Sending HEADER response (fresh)" << endl;
                             send(newSocket, response.c_str(), response.length(), 0);
 
                             cout << "📤 Waiting for chunks..." << endl;
@@ -381,6 +387,7 @@ void runTcpServer()
                 }
                 else if (msgType == transfer::MSG_RESUME_QUERY)
                 {
+                    cout << "[RECEIVER] RESUME_QUERY received" << endl;
                     // Resume query from sender
                     string filename;
                     int64_t fileSize;
@@ -397,6 +404,7 @@ void runTcpServer()
                         {
                             // Can resume
                             string response = TransferProtocol::buildResumeResponse(true, meta.lastAckedChunk);
+                            cout << "[RECEIVER] Sending RESUME_RESPONSE (OK)" << endl;
                             send(newSocket, response.c_str(), response.length(), 0);
 
                             cout << "📋 Resume query: OK, last chunk " << meta.lastAckedChunk << endl;
@@ -405,6 +413,7 @@ void runTcpServer()
                         {
                             // Can't resume
                             string response = TransferProtocol::buildResumeResponse(false);
+                            cout << "[RECEIVER] Sending RESUME_RESPONSE (NO)" << endl;
                             send(newSocket, response.c_str(), response.length(), 0);
 
                             cout << "📋 Resume query: NO (no existing transfer)" << endl;
@@ -413,6 +422,7 @@ void runTcpServer()
                 }
                 else if (msgType == transfer::MSG_CHUNK)
                 {
+                    cout << "[RECEIVER] Step 3: CHUNK received" << endl;
                     // Chunk data received - format: index|size\ndata
                     // (with my fix, payload now includes the data after \n)
                     size_t pipePos = payload.find(transfer::FIELD_DELIMITER);
@@ -461,6 +471,7 @@ void runTcpServer()
 
                         // Send ACK
                         string ack = TransferProtocol::buildAck(chunkIndex);
+                        cout << "[RECEIVER] Step 4: Sending ACK for chunk " << chunkIndex << endl;
                         send(newSocket, ack.c_str(), ack.length(), 0);
 
                         // Update metadata periodically (every 10 chunks)
@@ -476,6 +487,7 @@ void runTcpServer()
                 }
                 else if (msgType == transfer::MSG_COMPLETE)
                 {
+                    cout << "[RECEIVER] Step 5: COMPLETE received" << endl;
                     // Transfer complete
                     uint32_t receivedChecksum = 0;
                     try

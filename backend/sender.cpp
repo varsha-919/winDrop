@@ -225,7 +225,6 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         if (canResume && lastChunk >= 0)
         {
             cout << "🔄 Resuming from chunk " << (lastChunk + 1) << endl;
-            // We'll continue from this point
         }
         else
         {
@@ -296,12 +295,13 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         if (infile.gcount() == 0 || infile.eof() || !infile.good())
         {
             cout << "✅ File already complete (nothing to resume)" << endl;
-            infile.close();
-            windrop::SocketUtils::closeSocket(sock);
-            return 0;
+            // Don't exit early - we need to send COMPLETE so receiver knows transfer is done
         }
-        // Put back the character we read (seek back by 1)
-        infile.seekg(-1, ios::cur);
+        else
+        {
+            // Put back the character we read (seek back by 1)
+            infile.seekg(-1, ios::cur);
+        }
     }
 
     // Send chunks
