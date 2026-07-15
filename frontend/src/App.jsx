@@ -212,7 +212,12 @@ function App() {
         setSendStatus({ success: true, ip: targetIp });
         setSendingTo(null);
       } else if (status === "rejected") {
-        setSendStatus({ success: false, rejected: true, reason: response.data.reason, ip: targetIp });
+        setSendStatus({
+          success: false,
+          rejected: true,
+          reason: response.data.reason,
+          ip: targetIp,
+        });
         setSendingTo(null);
       } else if (status === "failed") {
         setSendStatus({ success: false, ip: targetIp });

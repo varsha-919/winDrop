@@ -85,6 +85,7 @@ function startRequestMonitor() {
   const tempDir = "/tmp";
 
   // Poll every 1 second for new request files
+  // pick requets from /tmp and add in pending requests map
   setInterval(() => {
     try {
       const files = fs.readdirSync(tempDir);
@@ -174,6 +175,10 @@ coreEngine.stdout.on("data", (data) => {
     }
   });
 });
+//requestMode - Either "true" (request/response workflow) or undefined (legacy direct send)
+//Why two modes:
+// Request mode: More user-friendly - receiver gets popup, can accept/reject
+// Legacy mode: Direct send without asking - receiver just receives the file
 
 // --- FILE UPLOAD & SEND ROUTE ---
 app.post("/send", upload.single("file"), (req, res) => {
@@ -202,19 +207,19 @@ app.post("/send", upload.single("file"), (req, res) => {
     return res.json({ success: true, filename: filename });
   }
 
-  // 🔥 LEGACY FLOW: Send immediately (backward compatible)
+  //  LEGACY FLOW: Send immediately (backward compatible)
   const sender = spawn(SENDER, [targetIp, filePath, fileSize.toString()]);
 
   sender.stdout.on("data", (data) => {
-    console.log(`📤 [SENDER]: ${data.toString()}`);
+    console.log(`[SENDER]: ${data.toString()}`);
   });
 
   sender.stderr.on("data", (data) => {
-    console.error(`❌ [SENDER ERROR]: ${data.toString()}`);
+    console.error(` [SENDER ERROR]: ${data.toString()}`);
   });
 
   sender.on("close", (code) => {
-    console.log(`🏁 Sender finished (Code: ${code})`);
+    console.log(` Sender finished (Code: ${code})`);
 
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
@@ -251,7 +256,9 @@ app.post("/send-request", (req, res) => {
   // Create request ID
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-  console.log(`📨 Sending TCP-based transfer request: ${filename} to ${targetIp}`);
+  console.log(
+    `📨 Sending TCP-based transfer request: ${filename} to ${targetIp}`,
+  );
 
   // Store pending request
   pendingRequests.set(requestId, {
