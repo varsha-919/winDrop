@@ -482,14 +482,14 @@ function App() {
                     <div className="device-name">{peer.name}</div>
                     <div className="device-ip">{peer.ip}</div>
                     {showProgress && (
-                      <div className="transfer-progress">
+                      <div className="transfer-progress" style={{ border: '2px solid red', padding: '4px', background: 'yellow' }}>
                         <div className="progress-bar">
                           <div
                             className="progress-fill"
-                            style={{ width: `${transferProgress}%` }}
+                            style={{ width: `${transferProgress}%`, background: 'blue' }}
                           ></div>
                         </div>
-                        <span className="progress-text">
+                        <span className="progress-text" style={{ color: 'blue', fontWeight: 'bold' }}>
                           {transferProgress}%
                         </span>
                       </div>
