@@ -56,88 +56,46 @@ function App() {
       setReceiveStatus("pending");
     });
 
-    // 🔥 HANDLE REQUEST ACCEPTED
-    // OLD IMPLEMENTATION - COMMENTED OUT: In the new TCP workflow, sender.cpp stays alive
-    // and automatically continues the transfer after receiving ACCEPT via TCP.
-    // The frontend should NOT call /start-transfer as that spawns a duplicate sender process.
-    /*
-    socket.on("request_accepted", (data) => {
-      console.log("✅ Request accepted:", data);
-      const { requestId, targetIp } = data;
-
-      // Start the actual transfer via HTTP
-      handleStartTransfer(requestId, targetIp);
-    });
-    */
-
-    // 🔥 HANDLE REQUEST REJECTED
-    // OLD IMPLEMENTATION - COMMENTED OUT: Rejection handling is now done via the
-    // sendStatus state updated in handleSend() based on /send-request response.
-    /*
+    // 🔥 HANDLE REQUEST REJECTED (UI notification only - TCP protocol is source of truth)
+    // When sender.cpp receives REJECT via TCP, it outputs to stdout which we parse here
     socket.on("request_rejected", (data) => {
       console.log("❌ Request rejected:", data);
       setSendStatus({ success: false, rejected: true, reason: data.reason });
       setSendingTo(null);
+      setTransferProgress(0);
     });
-    */
 
-    // 🔥 HANDLE TRANSFER COMPLETE (on receiver side)
-    // OLD IMPLEMENTATION - COMMENTED OUT: In the new TCP workflow, the receiver gets
-    // notification via the request monitor (incoming_request) and the transfer
-    // completion is handled by core.cpp writing the received file.
-    /*
-    socket.on("transfer_complete", (data) => {
-      console.log("📥 Transfer complete:", data);
-      setReceiveStatus("complete");
-      setIsReceiving(false);
-
-      // Send delivery confirmation back to sender
-      socket.emit("transfer_delivered", {
-        requestId: data.requestId,
-      });
-    });
-    */
-
-    // 🔥 HANDLE TRANSFER DELIVERED
-    // OLD IMPLEMENTATION - COMMENTED OUT: In the new TCP workflow, the sender receives
-    // DELIVERED_ACK via TCP protocol from the receiver. No Socket.IO notification needed.
-    /*
+    // 🔥 HANDLE TRANSFER DELIVERED (UI notification only - TCP protocol is source of truth)
+    // When sender.cpp receives DELIVERED_ACK via TCP, it outputs to stdout which we parse here
     socket.on("transfer_delivered", (data) => {
       console.log("🎉 Transfer delivered:", data);
       setSendStatus({ success: true, delivered: true });
       setSendingTo(null);
-      setTransferProgress(0);
+      setTransferProgress(100);
     });
-    */
 
-    // 🔥 HANDLE TRANSFER PROGRESS
-    // OLD IMPLEMENTATION - COMMENTED OUT: Progress is now handled via TCP protocol
-    // in the C++ code. Socket.IO progress tracking is obsolete.
-    /*
+    // 🔥 HANDLE TRANSFER PROGRESS (UI notification - parsing sender.cpp stdout)
+    // Progress is calculated and printed by sender.cpp; we just forward to UI
     socket.on("transfer_progress", (data) => {
       setTransferProgress(data.progress);
     });
-    */
 
-    // 🔥 HANDLE REQUEST CANCELLED
-    // OLD IMPLEMENTATION - COMMENTED OUT: Cancel handling is now done via TCP protocol.
-    /*
-    socket.on("request_cancelled", (data) => {
-      console.log("🚫 Request cancelled:", data);
-      setIncomingRequest(null);
-      setReceiveStatus(null);
+    // 🔥 HANDLE TRANSFER COMPLETE (on receiver side - UI notification)
+    // When core.cpp successfully saves the file and sends DELIVERED_ACK,
+    // the backend parses this and notifies the receiver frontend
+    socket.on("transfer_complete", (data) => {
+      console.log("📥 Transfer complete:", data);
+      setReceiveStatus("complete");
+      setIsReceiving(false);
     });
-    */
 
     return () => {
       socket.off("peers_list");
       socket.off("incoming_request");
-      // OLD IMPLEMENTATION - COMMENTED OUT: These Socket.IO listeners are obsolete
-      // socket.off("request_accepted");
-      // socket.off("request_rejected");
-      // socket.off("transfer_delivered");
-      // socket.off("transfer_progress");
-      // socket.off("request_cancelled");
+      socket.off("request_rejected");
+      socket.off("transfer_delivered");
+      socket.off("transfer_progress");
+      socket.off("transfer_complete");
     };
   }, [sendingTo]);
 

@@ -170,6 +170,16 @@ coreEngine.stdout.on("data", (data) => {
           io.emit("peers_list", peerList);
         }
       }
+    } else if (line.includes("Transfer completed and verified")) {
+      // ✅ Receiver successfully saved the file
+      // Extract request ID if available
+      const requestIdMatch = line.match(/Request ID: (\S+)/);
+      const requestId = requestIdMatch ? requestIdMatch[1] : null;
+
+      console.log("📥 Transfer completed on receiver side");
+
+      // Notify receiver frontend (all clients for now, could be targeted)
+      io.emit("transfer_complete", { requestId });
     } else if (line.trim().length > 0) {
       console.log(`⚙️ [C++] ${line.trim()}`);
     }
@@ -288,6 +298,37 @@ app.post("/send-request", (req, res) => {
     const output = data.toString();
     senderOutput += output;
     console.log(`📤 [SENDER]: ${output}`);
+
+    // Parse for UI notifications (ONLY - not controlling the transfer)
+    // The TCP protocol is the source of truth; Socket.IO is just for UI sync
+
+    // Progress updates: "📊 Progress: 50% (100/200 chunks)"
+    const progressMatch = output.match(/Progress:\s*(\d+)%/);
+    if (progressMatch) {
+      const progress = parseInt(progressMatch[1], 10);
+      io.emit("transfer_progress", { requestId, progress, targetIp });
+    }
+
+    // Request rejected: "❌ Transfer request rejected: Rejected by user"
+    if (output.includes("rejected")) {
+      io.emit("request_rejected", {
+        requestId,
+        targetIp,
+        reason: "Rejected by user",
+      });
+    }
+
+    // Transfer delivered: "🎉 Delivery confirmed! Request ID: xxx"
+    if (output.includes("Delivery confirmed")) {
+      // Extract request ID if present
+      const deliveryMatch = output.match(/Request ID:\s*(\S+)/);
+      const deliveryRequestId = deliveryMatch ? deliveryMatch[1] : requestId;
+
+      io.emit("transfer_delivered", {
+        requestId: deliveryRequestId,
+        targetIp,
+      });
+    }
   });
 
   sender.stderr.on("data", (data) => {
@@ -297,24 +338,6 @@ app.post("/send-request", (req, res) => {
   sender.on("close", (code) => {
     console.log(`🏁 Sender finished (Code: ${code})`);
     console.log(`📤 Output: ${senderOutput}`);
-
-    // Parse output to check for accept/reject
-    // OLD IMPLEMENTATION - COMMENTED OUT: These emits are part of the old Socket.IO workflow.
-    // In the new TCP flow, the sender stays alive and handles the complete transfer.
-    // The frontend should rely on the transfer completion status, not these notifications.
-    // Also, these emits fire when sender.cpp exits, which happens AFTER the transfer
-    // completes in the TCP flow, making them redundant and potentially confusing.
-    /*
-    if (senderOutput.includes("accepted")) {
-      pendingRequests.get(requestId).status = "accepted";
-      // Notify frontend of acceptance
-      io.emit("request_accepted", { requestId, targetIp });
-    } else if (senderOutput.includes("rejected")) {
-      pendingRequests.get(requestId).status = "rejected";
-      // Notify frontend of rejection
-      io.emit("request_rejected", { requestId, reason: "Rejected by user" });
-    }
-    */
 
     // Clean up uploaded file record
     uploadedFiles.delete(targetIp);
