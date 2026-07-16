@@ -57,6 +57,10 @@ function App() {
     });
 
     // 🔥 HANDLE REQUEST ACCEPTED
+    // OLD IMPLEMENTATION - COMMENTED OUT: In the new TCP workflow, sender.cpp stays alive
+    // and automatically continues the transfer after receiving ACCEPT via TCP.
+    // The frontend should NOT call /start-transfer as that spawns a duplicate sender process.
+    /*
     socket.on("request_accepted", (data) => {
       console.log("✅ Request accepted:", data);
       const { requestId, targetIp } = data;
@@ -64,15 +68,24 @@ function App() {
       // Start the actual transfer via HTTP
       handleStartTransfer(requestId, targetIp);
     });
+    */
 
     // 🔥 HANDLE REQUEST REJECTED
+    // OLD IMPLEMENTATION - COMMENTED OUT: Rejection handling is now done via the
+    // sendStatus state updated in handleSend() based on /send-request response.
+    /*
     socket.on("request_rejected", (data) => {
       console.log("❌ Request rejected:", data);
       setSendStatus({ success: false, rejected: true, reason: data.reason });
       setSendingTo(null);
     });
+    */
 
     // 🔥 HANDLE TRANSFER COMPLETE (on receiver side)
+    // OLD IMPLEMENTATION - COMMENTED OUT: In the new TCP workflow, the receiver gets
+    // notification via the request monitor (incoming_request) and the transfer
+    // completion is handled by core.cpp writing the received file.
+    /*
     socket.on("transfer_complete", (data) => {
       console.log("📥 Transfer complete:", data);
       setReceiveStatus("complete");
@@ -83,39 +96,57 @@ function App() {
         requestId: data.requestId,
       });
     });
+    */
 
     // 🔥 HANDLE TRANSFER DELIVERED
+    // OLD IMPLEMENTATION - COMMENTED OUT: In the new TCP workflow, the sender receives
+    // DELIVERED_ACK via TCP protocol from the receiver. No Socket.IO notification needed.
+    /*
     socket.on("transfer_delivered", (data) => {
       console.log("🎉 Transfer delivered:", data);
       setSendStatus({ success: true, delivered: true });
       setSendingTo(null);
       setTransferProgress(0);
     });
+    */
 
     // 🔥 HANDLE TRANSFER PROGRESS
+    // OLD IMPLEMENTATION - COMMENTED OUT: Progress is now handled via TCP protocol
+    // in the C++ code. Socket.IO progress tracking is obsolete.
+    /*
     socket.on("transfer_progress", (data) => {
       setTransferProgress(data.progress);
     });
+    */
 
     // 🔥 HANDLE REQUEST CANCELLED
+    // OLD IMPLEMENTATION - COMMENTED OUT: Cancel handling is now done via TCP protocol.
+    /*
     socket.on("request_cancelled", (data) => {
       console.log("🚫 Request cancelled:", data);
       setIncomingRequest(null);
       setReceiveStatus(null);
     });
+    */
 
     return () => {
       socket.off("peers_list");
       socket.off("incoming_request");
-      socket.off("request_accepted");
-      socket.off("request_rejected");
-      socket.off("transfer_delivered");
-      socket.off("transfer_progress");
-      socket.off("request_cancelled");
+      // OLD IMPLEMENTATION - COMMENTED OUT: These Socket.IO listeners are obsolete
+      // socket.off("request_accepted");
+      // socket.off("request_rejected");
+      // socket.off("transfer_delivered");
+      // socket.off("transfer_progress");
+      // socket.off("request_cancelled");
     };
   }, [sendingTo]);
 
   // 🔥 START TRANSFER (called after accept)
+  // OLD IMPLEMENTATION - COMMENTED OUT: This function calls /start-transfer which
+  // spawns a second sender.cpp process. In the new TCP workflow, sender.cpp stays
+  // alive and automatically continues the transfer after receiving ACCEPT via TCP.
+  // No second sender process should be spawned.
+  /*
   const handleStartTransfer = async (requestId, targetIp) => {
     try {
       await axios.post(
@@ -129,6 +160,7 @@ function App() {
       setSendingTo(null);
     }
   };
+  */
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();

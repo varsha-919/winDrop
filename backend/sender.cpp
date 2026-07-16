@@ -149,7 +149,7 @@ bool sendChunkWithAck(WindropSocket sock, int chunkIndex, const char *data, int 
  * @param requestId Unique ID for tracking (required if requestMode is true)
  */
 int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = -1,
-            bool requestMode = false, const string &requestId = "")
+             bool requestMode = false, const string &requestId = "")
 {
     // Create socket
     WindropSocket sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -232,16 +232,26 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         {
             string ext = filename.substr(dotPos + 1);
             // Simple mime type detection
-            if (ext == "pdf") fileType = "application/pdf";
-            else if (ext == "jpg" || ext == "jpeg") fileType = "image/jpeg";
-            else if (ext == "png") fileType = "image/png";
-            else if (ext == "gif") fileType = "image/gif";
-            else if (ext == "mp4") fileType = "video/mp4";
-            else if (ext == "mp3") fileType = "audio/mpeg";
-            else if (ext == "txt") fileType = "text/plain";
-            else if (ext == "zip") fileType = "application/zip";
-            else if (ext == "doc" || ext == "docx") fileType = "application/msword";
-            else if (ext == "xls" || ext == "xlsx") fileType = "application/vnd.ms-excel";
+            if (ext == "pdf")
+                fileType = "application/pdf";
+            else if (ext == "jpg" || ext == "jpeg")
+                fileType = "image/jpeg";
+            else if (ext == "png")
+                fileType = "image/png";
+            else if (ext == "gif")
+                fileType = "image/gif";
+            else if (ext == "mp4")
+                fileType = "video/mp4";
+            else if (ext == "mp3")
+                fileType = "audio/mpeg";
+            else if (ext == "txt")
+                fileType = "text/plain";
+            else if (ext == "zip")
+                fileType = "application/zip";
+            else if (ext == "doc" || ext == "docx")
+                fileType = "application/msword";
+            else if (ext == "xls" || ext == "xlsx")
+                fileType = "application/vnd.ms-excel";
         }
 
         // Build and send REQUEST message
@@ -522,7 +532,7 @@ int main(int argc, char *argv[])
     if (argc >= 2 && string(argv[1]) == "--request")
     {
         requestMode = true;
-        argOffset = 1;  // Skip the --request flag
+        argOffset = 1; // Skip the --request flag
 
         if (argc < 5)
         {
@@ -562,8 +572,14 @@ int main(int argc, char *argv[])
         filePath = argv[4];
         if (argc >= 6)
         {
-            try { fileSize = stoll(argv[5]); }
-            catch (...) { fileSize = -1; }
+            try
+            {
+                fileSize = stoll(argv[5]);
+            }
+            catch (...)
+            {
+                fileSize = -1;
+            }
         }
     }
     else
@@ -573,12 +589,17 @@ int main(int argc, char *argv[])
         filePath = argv[2];
         if (argc >= 4)
         {
-            try { fileSize = stoll(argv[3]); }
-            catch (...) { fileSize = -1; }
+            try
+            {
+                fileSize = stoll(argv[3]);
+            }
+            catch (...)
+            {
+                fileSize = -1;
+            }
         }
     }
 
-    
     // Send the file
     int result = sendFile(targetIp, filePath, fileSize, requestMode, requestId);
 

@@ -299,6 +299,12 @@ app.post("/send-request", (req, res) => {
     console.log(`📤 Output: ${senderOutput}`);
 
     // Parse output to check for accept/reject
+    // OLD IMPLEMENTATION - COMMENTED OUT: These emits are part of the old Socket.IO workflow.
+    // In the new TCP flow, the sender stays alive and handles the complete transfer.
+    // The frontend should rely on the transfer completion status, not these notifications.
+    // Also, these emits fire when sender.cpp exits, which happens AFTER the transfer
+    // completes in the TCP flow, making them redundant and potentially confusing.
+    /*
     if (senderOutput.includes("accepted")) {
       pendingRequests.get(requestId).status = "accepted";
       // Notify frontend of acceptance
@@ -308,6 +314,7 @@ app.post("/send-request", (req, res) => {
       // Notify frontend of rejection
       io.emit("request_rejected", { requestId, reason: "Rejected by user" });
     }
+    */
 
     // Clean up uploaded file record
     uploadedFiles.delete(targetIp);
@@ -352,6 +359,10 @@ app.post("/respond-request", (req, res) => {
 });
 
 // --- HTTP ENDPOINT TO START SENDER.CPP (called after accept) ---
+// OLD IMPLEMENTATION - COMMENTED OUT: Replaced by TCP automatic continuation in sender.cpp
+// In the new TCP workflow, sender.cpp stays alive and automatically continues the transfer
+// after receiving ACCEPT via TCP. No second sender process should be spawned.
+/*
 app.post("/start-transfer", (req, res) => {
   const { requestId, targetIp } = req.body;
 
@@ -411,6 +422,7 @@ app.post("/start-transfer", (req, res) => {
 
   res.json({ success: true, requestId });
 });
+*/
 
 // --- SOCKET CONNECTION ---
 io.on("connection", (socket) => {
@@ -426,6 +438,10 @@ io.on("connection", (socket) => {
   socket.emit("peers_list", peerList);
 
   // 🔥 HANDLE TRANSFER REQUEST (from sender)
+  // OLD IMPLEMENTATION - COMMENTED OUT: Replaced by TCP request/response workflow.
+  // In the new flow, sender.cpp communicates via TCP with core.cpp, which writes
+  // request.json files. The request monitor detects these and emits "incoming_request".
+  /*
   socket.on("transfer_request", (data) => {
     const { targetIp, filename, fileSize, fileType } = data;
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -476,8 +492,13 @@ io.on("connection", (socket) => {
     // Send request ID back to sender so they can track it
     socket.emit("request_queued", { requestId });
   });
+  */
 
   // 🔥 HANDLE TRANSFER ACCEPT (from receiver)
+  // OLD IMPLEMENTATION - COMMENTED OUT: Replaced by TCP request/response workflow.
+  // In the new flow, the receiver responds via HTTP (/respond-request), which writes
+  // response.txt. The sender.cpp reads this via TCP and continues automatically.
+  /*
   socket.on("transfer_accept", (data) => {
     const { requestId, senderIp } = data;
     console.log(`✅ Transfer accepted: ${requestId}`);
@@ -510,8 +531,11 @@ io.on("connection", (socket) => {
       io.emit("request_accepted", { requestId, targetIp: request.targetIp });
     }
   });
+  */
 
   // 🔥 HANDLE TRANSFER REJECT (from receiver)
+  // OLD IMPLEMENTATION - COMMENTED OUT: Replaced by TCP request/response workflow.
+  /*
   socket.on("transfer_reject", (data) => {
     const { requestId, senderIp, reason } = data;
     console.log(
@@ -542,8 +566,11 @@ io.on("connection", (socket) => {
     // Clean up
     pendingRequests.delete(requestId);
   });
+  */
 
   // 🔥 HANDLE TRANSFER DELIVERED (from receiver after successful transfer)
+  // OLD IMPLEMENTATION - COMMENTED OUT: Replaced by TCP COMPLETE/DELIVERED_ACK protocol.
+  /*
   socket.on("transfer_delivered", (data) => {
     const { requestId } = data;
     console.log(`🎉 Transfer delivered confirmation: ${requestId}`);
@@ -564,16 +591,22 @@ io.on("connection", (socket) => {
     // Clean up
     pendingRequests.delete(requestId);
   });
+  */
 
   // 🔥 HANDLE TRANSFER PROGRESS
+  // OLD IMPLEMENTATION - COMMENTED OUT: Progress is now handled via TCP protocol.
+  /*
   socket.on("transfer_progress", (data) => {
     const { requestId, progress, senderIp } = data;
 
     // Forward to sender
     io.to(senderIp).emit("transfer_progress", { requestId, progress });
   });
+  */
 
   // 🔥 HANDLE TRANSFER CANCEL (from sender)
+  // OLD IMPLEMENTATION - COMMENTED OUT: Cancel workflow is now handled via TCP.
+  /*
   socket.on("transfer_cancel", (data) => {
     const { requestId, targetIp } = data;
     console.log(`🚫 Transfer cancelled: ${requestId}`);
@@ -594,6 +627,7 @@ io.on("connection", (socket) => {
       pendingRequests.delete(requestId);
     }
   });
+  */
 
   // Store socket IP for targeting
   socket.on("register", (data) => {
