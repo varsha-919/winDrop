@@ -299,6 +299,8 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
             string reason;
             TransferProtocol::parseRequestReject(payload, rejectRequestId, reason);
             cerr << "❌ Transfer request rejected: " << reason << endl;
+            // Machine-readable event for backend UI notification
+            cout << "EVENT_REJECTED:" << rejectRequestId << endl;
             windrop::SocketUtils::closeSocket(sock);
             return 1;
         }
@@ -449,6 +451,8 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
         {
             int progress = static_cast<int>((currentChunk * 100.0) / totalChunks);
             cout << "📊 Progress: " << progress << "% (" << currentChunk << "/" << totalChunks << " chunks)" << endl;
+            // Machine-readable event for backend UI notification
+            cout << "EVENT_PROGRESS:" << progress << endl;
         }
     }
 
@@ -489,6 +493,8 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
             string ackRequestId;
             TransferProtocol::parseDeliveredAck(payload, ackRequestId);
             cout << "🎉 Delivery confirmed! Request ID: " << ackRequestId << endl;
+            // Machine-readable event for backend UI notification
+            cout << "EVENT_DELIVERED:" << ackRequestId << endl;
         }
         else
         {

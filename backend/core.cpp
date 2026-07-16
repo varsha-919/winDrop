@@ -624,9 +624,12 @@ void runTcpServer()
                             cout << "✅ Transfer completed and verified (" << actualChecksum << ")" << endl;
                             cout << "📁 File saved as: " << finalPath << endl;
 
+                            // Machine-readable event for backend UI notification
+                            string ackRequestId = meta.requestId.empty() ? "unknown" : meta.requestId;
+                            cout << "EVENT_COMPLETE:" << ackRequestId << ":" << finalPath << endl;
+
                             // Send DELIVERED_ACK to sender
                             // Use request ID from metadata if available
-                            string ackRequestId = meta.requestId.empty() ? "unknown" : meta.requestId;
                             string ackMsg = TransferProtocol::buildDeliveredAck(ackRequestId);
                             send(newSocket, ackMsg.c_str(), ackMsg.length(), 0);
                             cout << "📤 DELIVERED_ACK sent to sender" << endl;

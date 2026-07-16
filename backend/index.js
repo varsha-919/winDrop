@@ -136,11 +136,21 @@ coreEngine.stdout.on("data", (data) => {
   // When C++ core prints to stdout, this fires
   // data is a Buffer, needs .toString()
 
-  // C++ core outputs:
-  // "Founded Peer: DESKTOP:192.168.1.10 Alive"
   const lines = data.toString().trim().split("\n");
 
   lines.forEach((line) => {
+    // Machine-readable event: EVENT_COMPLETE:<requestId>:<filename>
+    if (line.startsWith("EVENT_COMPLETE:")) {
+      const parts = line.split(":");
+      const requestId = parts[1] || null;
+      const filename = parts[2] || null;
+
+      console.log("📥 Transfer completed on receiver side:", filename);
+      io.emit("transfer_complete", { requestId, filename });
+      return;
+    }
+
+    // Regular peer discovery
     if (line.includes("Discovered peer:")) {
       const parts = line.split("Discovered peer: ");
 
@@ -170,16 +180,6 @@ coreEngine.stdout.on("data", (data) => {
           io.emit("peers_list", peerList);
         }
       }
-    } else if (line.includes("Transfer completed and verified")) {
-      // ✅ Receiver successfully saved the file
-      // Extract request ID if available
-      const requestIdMatch = line.match(/Request ID: (\S+)/);
-      const requestId = requestIdMatch ? requestIdMatch[1] : null;
-
-      console.log("📥 Transfer completed on receiver side");
-
-      // Notify receiver frontend (all clients for now, could be targeted)
-      io.emit("transfer_complete", { requestId });
     } else if (line.trim().length > 0) {
       console.log(`⚙️ [C++] ${line.trim()}`);
     }
@@ -299,36 +299,33 @@ app.post("/send-request", (req, res) => {
     senderOutput += output;
     console.log(`📤 [SENDER]: ${output}`);
 
-    // Parse for UI notifications (ONLY - not controlling the transfer)
+    // Parse ONLY machine-readable EVENT_* lines for UI notifications
     // The TCP protocol is the source of truth; Socket.IO is just for UI sync
+    const lines = output.trim().split("\n");
 
-    // Progress updates: "📊 Progress: 50% (100/200 chunks)"
-    const progressMatch = output.match(/Progress:\s*(\d+)%/);
-    if (progressMatch) {
-      const progress = parseInt(progressMatch[1], 10);
-      io.emit("transfer_progress", { requestId, progress, targetIp });
-    }
-
-    // Request rejected: "❌ Transfer request rejected: Rejected by user"
-    if (output.includes("rejected")) {
-      io.emit("request_rejected", {
-        requestId,
-        targetIp,
-        reason: "Rejected by user",
-      });
-    }
-
-    // Transfer delivered: "🎉 Delivery confirmed! Request ID: xxx"
-    if (output.includes("Delivery confirmed")) {
-      // Extract request ID if present
-      const deliveryMatch = output.match(/Request ID:\s*(\S+)/);
-      const deliveryRequestId = deliveryMatch ? deliveryMatch[1] : requestId;
-
-      io.emit("transfer_delivered", {
-        requestId: deliveryRequestId,
-        targetIp,
-      });
-    }
+    lines.forEach((line) => {
+      // EVENT_PROGRESS:<percent>
+      if (line.startsWith("EVENT_PROGRESS:")) {
+        const progress = parseInt(line.split(":")[1], 10);
+        io.emit("transfer_progress", { requestId, progress, targetIp });
+      }
+      // EVENT_REJECTED:<requestId>
+      else if (line.startsWith("EVENT_REJECTED:")) {
+        io.emit("request_rejected", {
+          requestId,
+          targetIp,
+          reason: "Rejected by user",
+        });
+      }
+      // EVENT_DELIVERED:<requestId>
+      else if (line.startsWith("EVENT_DELIVERED:")) {
+        const deliveredRequestId = line.split(":")[1] || requestId;
+        io.emit("transfer_delivered", {
+          requestId: deliveredRequestId,
+          targetIp,
+        });
+      }
+    });
   });
 
   sender.stderr.on("data", (data) => {
