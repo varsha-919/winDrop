@@ -63,30 +63,30 @@ function App() {
       setTransferProgress(data.progress);
     });
 
-    // Request rejected - trim requestId
+    // Request rejected - trim requestId, set status but don't clear sendingTo immediately
     socket.on("request_rejected", (data) => {
       if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] request_rejected received:", data);
       setSendStatus({ success: false, rejected: true, reason: data.reason });
-      setSendingTo(null);
-      setTransferProgress(0);
+      // Don't set sendingTo(null) immediately - let the UI show the failed state first
     });
 
-    // Transfer delivered (sender side) - trim requestId, keep sendingTo to show success state
+    // Transfer delivered (sender side) - trim requestId, set success status
     socket.on("transfer_delivered", (data) => {
       if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] transfer_delivered received:", data);
       setSendStatus({ success: true, delivered: true });
-      setSendingTo(null);
+      // Don't set sendingTo(null) immediately - let the UI show the success state first
       setTransferProgress(100);
     });
 
-    // Transfer complete (receiver side) - trim requestId
+    // Transfer complete (receiver side) - trim requestId, set status (don't clear isReceiving yet)
     socket.on("transfer_complete", (data) => {
       if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] transfer_complete received:", data);
+      // Set receiveStatus to "complete" - this will show the message
+      // Don't set isReceiving(false) yet - let the message display first
       setReceiveStatus("complete");
-      setIsReceiving(false);
     });
 
     return () => {
