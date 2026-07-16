@@ -456,6 +456,11 @@ function App() {
             // Show progress when actively sending OR when transfer just completed (success/failed)
             const showProgress = (isSending || (isDone && transferProgress > 0));
 
+            // DEBUG: Log render state for the peer being sent to
+            if (sendingTo && sendingTo === peer.ip) {
+              console.log("🔍 [RENDER] peer.ip:", peer.ip, "sendingTo:", sendingTo, "isSending:", isSending, "transferProgress:", transferProgress, "showProgress:", showProgress);
+            }
+
             let cardClass = "device-card";
             if (success && sendStatus?.delivered) cardClass += " success";
             if (success && !sendStatus?.delivered) cardClass += " transferring";
