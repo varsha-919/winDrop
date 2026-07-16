@@ -5,6 +5,19 @@ import "./App.css";
 
 const socket = io(`http://${window.location.hostname}:5001`);
 
+// DEBUG: Log socket connection status
+socket.on("connect", () => {
+  console.log("🔌 [SOCKET] Connected with ID:", socket.id);
+});
+
+socket.on("disconnect", () => {
+  console.log("🔌 [SOCKET] Disconnected");
+});
+
+socket.on("connect_error", (err) => {
+  console.error("🔌 [SOCKET] Connection error:", err.message);
+});
+
 function App() {
   const [peers, setPeers] = useState([]);
   const [selectedFile, setSelectedFile] = useState(null);
@@ -24,7 +37,65 @@ function App() {
 
   const fileInputRef = useRef(null);
 
-  // 🔥 REGISTER THIS CLIENT'S IP
+  // 🔥 STABLE SOCKET LISTENERS - register once, never remove
+  useEffect(() => {
+    console.log("🔧 [EFFECT] Registering stable socket listeners");
+
+    // Peers list
+    socket.on("peers_list", (peerList) => {
+      console.log("🔌 [SOCKET] peers_list received:", peerList.length, "peers");
+      setPeers(peerList);
+      setIsSearching(false);
+    });
+
+    // Incoming file request
+    socket.on("incoming_request", (data) => {
+      console.log("🔌 [SOCKET] incoming_request received:", data);
+      setIncomingRequest(data);
+      setReceiveStatus("pending");
+    });
+
+    // Transfer progress
+    socket.on("transfer_progress", (data) => {
+      console.log("🔌 [SOCKET] transfer_progress received:", data);
+      setTransferProgress(data.progress);
+    });
+
+    // Request rejected
+    socket.on("request_rejected", (data) => {
+      console.log("🔌 [SOCKET] request_rejected received:", data);
+      setSendStatus({ success: false, rejected: true, reason: data.reason });
+      setSendingTo(null);
+      setTransferProgress(0);
+    });
+
+    // Transfer delivered (sender side)
+    socket.on("transfer_delivered", (data) => {
+      console.log("🔌 [SOCKET] transfer_delivered received:", data);
+      setSendStatus({ success: true, delivered: true });
+      setSendingTo(null);
+      setTransferProgress(100);
+    });
+
+    // Transfer complete (receiver side)
+    socket.on("transfer_complete", (data) => {
+      console.log("🔌 [SOCKET] transfer_complete received:", data);
+      setReceiveStatus("complete");
+      setIsReceiving(false);
+    });
+
+    return () => {
+      console.log("🔧 [EFFECT] Cleaning up stable socket listeners");
+      socket.off("peers_list");
+      socket.off("incoming_request");
+      socket.off("transfer_progress");
+      socket.off("request_rejected");
+      socket.off("transfer_delivered");
+      socket.off("transfer_complete");
+    };
+  }, []); // Empty deps - register once, never re-register
+
+  // 🔥 REGISTER CLIENT IP - separate effect that CAN re-run
   useEffect(() => {
     const registerClient = async () => {
       try {
@@ -36,69 +107,14 @@ function App() {
           ip: res.data.ip,
         });
 
-        console.log("Registered with:", res.data.ip);
+        console.log("📱 Registered with IP:", res.data.ip);
       } catch (err) {
         console.error("Registration failed:", err);
       }
     };
 
     registerClient();
-
-    socket.on("peers_list", (peerList) => {
-      setPeers(peerList);
-      setIsSearching(false);
-    });
-
-    // 🔥 HANDLE INCOMING REQUEST
-    socket.on("incoming_request", (data) => {
-      console.log("📥 Incoming request:", data);
-      setIncomingRequest(data);
-      setReceiveStatus("pending");
-    });
-
-    // 🔥 HANDLE REQUEST REJECTED (UI notification only - TCP protocol is source of truth)
-    // When sender.cpp receives REJECT via TCP, it outputs to stdout which we parse here
-    socket.on("request_rejected", (data) => {
-      console.log("❌ [FRONTEND] request_rejected received:", data);
-      setSendStatus({ success: false, rejected: true, reason: data.reason });
-      setSendingTo(null);
-      setTransferProgress(0);
-    });
-
-    // 🔥 HANDLE TRANSFER DELIVERED (UI notification only - TCP protocol is source of truth)
-    // When sender.cpp receives DELIVERED_ACK via TCP, it outputs to stdout which we parse here
-    socket.on("transfer_delivered", (data) => {
-      console.log("🎉 [FRONTEND] transfer_delivered received:", data);
-      setSendStatus({ success: true, delivered: true });
-      setSendingTo(null);
-      setTransferProgress(100);
-    });
-
-    // 🔥 HANDLE TRANSFER PROGRESS (UI notification - parsing sender.cpp stdout)
-    // Progress is calculated and printed by sender.cpp; we just forward to UI
-    socket.on("transfer_progress", (data) => {
-      console.log("📊 [FRONTEND] transfer_progress received:", data);
-      setTransferProgress(data.progress);
-    });
-
-    // 🔥 HANDLE TRANSFER COMPLETE (on receiver side - UI notification)
-    // When core.cpp successfully saves the file and sends DELIVERED_ACK,
-    // the backend parses this and notifies the receiver frontend
-    socket.on("transfer_complete", (data) => {
-      console.log("📥 [FRONTEND] transfer_complete received:", data);
-      setReceiveStatus("complete");
-      setIsReceiving(false);
-    });
-
-    return () => {
-      socket.off("peers_list");
-      socket.off("incoming_request");
-      socket.off("request_rejected");
-      socket.off("transfer_delivered");
-      socket.off("transfer_progress");
-      socket.off("transfer_complete");
-    };
-  }, [sendingTo]);
+  }, []);
 
   // 🔥 START TRANSFER (called after accept)
   // OLD IMPLEMENTATION - COMMENTED OUT: This function calls /start-transfer which
