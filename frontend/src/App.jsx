@@ -48,8 +48,9 @@ function App() {
       setIsSearching(false);
     });
 
-    // Incoming file request
+    // Incoming file request - trim requestId to remove carriage returns
     socket.on("incoming_request", (data) => {
+      if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] incoming_request received:", data);
       setIncomingRequest(data);
       setReceiveStatus("pending");
@@ -58,27 +59,31 @@ function App() {
     // Transfer progress
     socket.on("transfer_progress", (data) => {
       console.log("🔌 [SOCKET] transfer_progress received:", data);
+      // Keep sendingTo set until final state is shown
       setTransferProgress(data.progress);
     });
 
-    // Request rejected
+    // Request rejected - trim requestId
     socket.on("request_rejected", (data) => {
+      if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] request_rejected received:", data);
       setSendStatus({ success: false, rejected: true, reason: data.reason });
       setSendingTo(null);
       setTransferProgress(0);
     });
 
-    // Transfer delivered (sender side)
+    // Transfer delivered (sender side) - trim requestId, keep sendingTo to show success state
     socket.on("transfer_delivered", (data) => {
+      if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] transfer_delivered received:", data);
       setSendStatus({ success: true, delivered: true });
       setSendingTo(null);
       setTransferProgress(100);
     });
 
-    // Transfer complete (receiver side)
+    // Transfer complete (receiver side) - trim requestId
     socket.on("transfer_complete", (data) => {
+      if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] transfer_complete received:", data);
       setReceiveStatus("complete");
       setIsReceiving(false);
@@ -448,6 +453,9 @@ function App() {
             const failed = isDone && !sendStatus?.success;
             const waiting = isDone && sendStatus?.waiting;
 
+            // Show progress when actively sending OR when transfer just completed (success/failed)
+            const showProgress = (isSending || (isDone && transferProgress > 0));
+
             let cardClass = "device-card";
             if (success && sendStatus?.delivered) cardClass += " success";
             if (success && !sendStatus?.delivered) cardClass += " transferring";
@@ -468,7 +476,7 @@ function App() {
                   <div className="device-info">
                     <div className="device-name">{peer.name}</div>
                     <div className="device-ip">{peer.ip}</div>
-                    {isSending && transferProgress > 0 && (
+                    {showProgress && (
                       <div className="transfer-progress">
                         <div className="progress-bar">
                           <div
