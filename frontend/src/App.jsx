@@ -59,7 +59,7 @@ function App() {
     // 🔥 HANDLE REQUEST REJECTED (UI notification only - TCP protocol is source of truth)
     // When sender.cpp receives REJECT via TCP, it outputs to stdout which we parse here
     socket.on("request_rejected", (data) => {
-      console.log("❌ Request rejected:", data);
+      console.log("❌ [FRONTEND] request_rejected received:", data);
       setSendStatus({ success: false, rejected: true, reason: data.reason });
       setSendingTo(null);
       setTransferProgress(0);
@@ -68,7 +68,7 @@ function App() {
     // 🔥 HANDLE TRANSFER DELIVERED (UI notification only - TCP protocol is source of truth)
     // When sender.cpp receives DELIVERED_ACK via TCP, it outputs to stdout which we parse here
     socket.on("transfer_delivered", (data) => {
-      console.log("🎉 Transfer delivered:", data);
+      console.log("🎉 [FRONTEND] transfer_delivered received:", data);
       setSendStatus({ success: true, delivered: true });
       setSendingTo(null);
       setTransferProgress(100);
@@ -77,6 +77,7 @@ function App() {
     // 🔥 HANDLE TRANSFER PROGRESS (UI notification - parsing sender.cpp stdout)
     // Progress is calculated and printed by sender.cpp; we just forward to UI
     socket.on("transfer_progress", (data) => {
+      console.log("📊 [FRONTEND] transfer_progress received:", data);
       setTransferProgress(data.progress);
     });
 
@@ -84,7 +85,7 @@ function App() {
     // When core.cpp successfully saves the file and sends DELIVERED_ACK,
     // the backend parses this and notifies the receiver frontend
     socket.on("transfer_complete", (data) => {
-      console.log("📥 Transfer complete:", data);
+      console.log("📥 [FRONTEND] transfer_complete received:", data);
       setReceiveStatus("complete");
       setIsReceiving(false);
     });

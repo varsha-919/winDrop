@@ -139,14 +139,21 @@ coreEngine.stdout.on("data", (data) => {
   const lines = data.toString().trim().split("\n");
 
   lines.forEach((line) => {
+    // DEBUG: Log raw line
+    if (line.startsWith("EVENT_")) {
+      console.log("🔍 [DEBUG] Raw EVENT line:", line);
+    }
+
     // Machine-readable event: EVENT_COMPLETE:<requestId>:<filename>
     if (line.startsWith("EVENT_COMPLETE:")) {
       const parts = line.split(":");
       const requestId = parts[1] || null;
       const filename = parts[2] || null;
 
-      console.log("📥 Transfer completed on receiver side:", filename);
+      console.log("📥 [DEBUG] EVENT_COMPLETE parsed - requestId:", requestId, "filename:", filename);
+      console.log("📥 [DEBUG] About to emit transfer_complete");
       io.emit("transfer_complete", { requestId, filename });
+      console.log("📥 [DEBUG] transfer_complete emitted");
       return;
     }
 
@@ -304,26 +311,40 @@ app.post("/send-request", (req, res) => {
     const lines = output.trim().split("\n");
 
     lines.forEach((line) => {
+      // DEBUG: Log raw EVENT lines
+      if (line.startsWith("EVENT_")) {
+        console.log("🔍 [DEBUG] Raw EVENT line:", line);
+      }
+
       // EVENT_PROGRESS:<percent>
       if (line.startsWith("EVENT_PROGRESS:")) {
         const progress = parseInt(line.split(":")[1], 10);
+        console.log("📊 [DEBUG] EVENT_PROGRESS - progress:", progress);
+        console.log("📊 [DEBUG] About to emit transfer_progress");
         io.emit("transfer_progress", { requestId, progress, targetIp });
+        console.log("📊 [DEBUG] transfer_progress emitted");
       }
       // EVENT_REJECTED:<requestId>
       else if (line.startsWith("EVENT_REJECTED:")) {
+        console.log("❌ [DEBUG] EVENT_REJECTED detected");
+        console.log("❌ [DEBUG] About to emit request_rejected");
         io.emit("request_rejected", {
           requestId,
           targetIp,
           reason: "Rejected by user",
         });
+        console.log("❌ [DEBUG] request_rejected emitted");
       }
       // EVENT_DELIVERED:<requestId>
       else if (line.startsWith("EVENT_DELIVERED:")) {
         const deliveredRequestId = line.split(":")[1] || requestId;
+        console.log("🎉 [DEBUG] EVENT_DELIVERED - requestId:", deliveredRequestId);
+        console.log("🎉 [DEBUG] About to emit transfer_delivered");
         io.emit("transfer_delivered", {
           requestId: deliveredRequestId,
           targetIp,
         });
+        console.log("🎉 [DEBUG] transfer_delivered emitted");
       }
     });
   });
