@@ -143,26 +143,6 @@ function App() {
     registerClient();
   }, []);
 
-  // 🔥 START TRANSFER (called after accept)
-  // OLD IMPLEMENTATION - COMMENTED OUT: This function calls /start-transfer which
-  // spawns a second sender.cpp process. In the new TCP workflow, sender.cpp stays
-  // alive and automatically continues the transfer after receiving ACCEPT via TCP.
-  // No second sender process should be spawned.
-  /*
-  const handleStartTransfer = async (requestId, targetIp) => {
-    try {
-      await axios.post(
-        `http://${window.location.hostname}:5001/start-transfer`,
-        { requestId, targetIp },
-      );
-      // Status will be updated via socket events
-    } catch (err) {
-      console.error("Failed to start transfer:", err);
-      setSendStatus({ success: false, ip: sendingTo });
-      setSendingTo(null);
-    }
-  };
-  */
 
   const handleDragEnter = useCallback((e) => {
     e.preventDefault();
