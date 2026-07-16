@@ -446,10 +446,12 @@ int sendFile(const string &targetIp, const string &filePath, int64_t fileSize = 
 
         currentChunk++;
 
-        // Progress update every 50 chunks
-        if (currentChunk % 50 == 0)
+        // Progress update when percentage changes
+        int progress = static_cast<int>((currentChunk * 100.0) / totalChunks);
+        static int lastProgress = -1;
+        if (progress != lastProgress)
         {
-            int progress = static_cast<int>((currentChunk * 100.0) / totalChunks);
+            lastProgress = progress;
             cout << "📊 Progress: " << progress << "% (" << currentChunk << "/" << totalChunks << " chunks)" << endl;
             // Machine-readable event for backend UI notification
             cout << "EVENT_PROGRESS:" << progress << endl;

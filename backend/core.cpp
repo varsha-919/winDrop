@@ -621,12 +621,14 @@ void runTcpServer()
                         {
                             // Clean up metadata
                             windrop::FileUtils::cleanupTemp(meta.filename);
-                            cout << "✅ Transfer completed and verified (" << actualChecksum << ")" << endl;
-                            cout << "📁 File saved as: " << finalPath << endl;
 
-                            // Machine-readable event for backend UI notification
+                            // Machine-readable event for backend UI notification (single line, no interleaved output)
                             string ackRequestId = meta.requestId.empty() ? "unknown" : meta.requestId;
                             cout << "EVENT_COMPLETE:" << ackRequestId << ":" << finalPath << endl;
+
+                            // Human-readable logs (after EVENT line)
+                            cout << "✅ Transfer completed and verified (" << actualChecksum << ")" << endl;
+                            cout << "📁 File saved as: " << finalPath << endl;
 
                             // Send DELIVERED_ACK to sender
                             // Use request ID from metadata if available
