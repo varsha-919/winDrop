@@ -35,6 +35,10 @@ function App() {
   // 🔥 TRANSFER PROGRESS STATE
   const [transferProgress, setTransferProgress] = useState(0);
 
+  // 🔥 SUCCESS NOTIFICATION STATE
+  const [successMessage, setSuccessMessage] = useState(null);
+  const [receivedFileInfo, setReceivedFileInfo] = useState(null);
+
   const fileInputRef = useRef(null);
 
   // 🔥 STABLE SOCKET LISTENERS - register once, never remove
@@ -82,11 +86,13 @@ function App() {
       console.log("🔌 [SOCKET] transfer_delivered received:", data);
       setSendStatus({ success: true, delivered: true });
       setTransferProgress(100);
+      setSuccessMessage("✅ File sent successfully");
 
       // Clear sending state after showing success for a moment
       setTimeout(() => {
         setSendingTo(null);
         setTransferProgress(0);
+        setSuccessMessage(null);
       }, 3000);
     });
 
@@ -95,11 +101,13 @@ function App() {
       if (data.requestId) data.requestId = data.requestId.trim();
       console.log("🔌 [SOCKET] transfer_complete received:", data);
       setReceiveStatus("complete");
+      setReceivedFileInfo(data.filename || "Unknown file");
       setIsReceiving(false);
 
       // Clear the message after showing it
       setTimeout(() => {
         setReceiveStatus(null);
+        setReceivedFileInfo(null);
       }, 5000);
     });
 
@@ -440,7 +448,12 @@ function App() {
         </div>
 
         <div className="status-bar">
-          {isSearching && (
+          {successMessage && (
+            <div className="success-notification">
+              {successMessage}
+            </div>
+          )}
+          {isSearching && !successMessage && (
             <div className="searching">
               <div className="search-ring">
                 <div className="search-dot" />
@@ -448,7 +461,7 @@ function App() {
               <span>Scanning network...</span>
             </div>
           )}
-          {!isSearching && peers.length > 0 && (
+          {!isSearching && peers.length > 0 && !successMessage && (
             <div className="device-count">
               <span className="count">{peers.length}</span>
               <span>device{peers.length !== 1 ? "s" : ""} online</span>
@@ -571,10 +584,17 @@ function App() {
         )}
 
         {/* 🔥 RECEIVE STATUS */}
-        {isReceiving && receiveStatus && (
+        {receiveStatus && (
           <div className="receive-status">
             {receiveStatus === "accepted" && "Accepted - Receiving file..."}
-            {receiveStatus === "complete" && "File received successfully!"}
+            {receiveStatus === "complete" && (
+              <div>
+                <div>✅ File received successfully</div>
+                {receivedFileInfo && (
+                  <div className="received-filename">Filename: {receivedFileInfo}</div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
